@@ -21,7 +21,7 @@ ob_start();
         </div>
         <p class="main_description a_center">Health care brought to your home.</p>
         <div class="row">
-          <?php $web->showContent("feature",2,["name","description","image"]); ?>
+          <?php $web->showContent("feature",2,["title","description","image"]); ?>
         </div>
     </div>
 </section>
