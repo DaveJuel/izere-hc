@@ -1,0 +1,21 @@
+{
+     "name": "Addax",
+     "version": "1.0.0",
+     "description":"Web app builder",
+     "authors": [
+        {
+            "name": "David NIWEWE",
+            "email": "davejuelz@gmail.com",
+            "homepage": "https://www.addax.herokuapp.com",
+            "role": "Developer"
+        }
+    ],
+  "require": {
+    "ext-mysql": "*",
+    "ext-gettext": "*",
+    "ext-mbstring":"*"
+  },  
+   "require-dev": {
+      "heroku/heroku-buildpack-php": "*"
+   }
+}
