@@ -45,13 +45,13 @@ ob_start();
                         <div class="col-md-4 col-sm-4">
                             <div class="contact-item">
                                 <i class="glyphicon glyphicon-phone-alt"></i>
-                                <h6>+250 788353869</h6>
+                                <h6>+250 788308008</h6>
                             </div>
                         </div>
                         <div class="col-md-4 col-sm-4">
                             <div class="contact-item">
                                 <i class="fa fa-envelope"></i>
-                                <h6>davejuelz@gmail.com</h6>
+                                <h6>info@izerehomenursing.com</h6>
                             </div>
                         </div>
                     </div>

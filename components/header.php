@@ -21,7 +21,7 @@
                 <li class="dropdown simple_menu active">
                     <a href="#slider">HOME </a>
                 </li>                
-                <li class="dropdown mega_menu mega_menu_fullwidth"><a href="#features" aria-expanded="true">FEATURES</a>
+                <li class="dropdown mega_menu mega_menu_fullwidth"><a href="#features" aria-expanded="true">WHAT WE DO</a>
                 </li>                
                 <li><a href="#contact">CONTACT US</a></li>                
                 <li class="menu_button">
