@@ -31,7 +31,7 @@ ob_start();
         <div class="row">
             <div class="col-md-6">
                 <div class="main_title mt_wave a_left">
-                    <h2>OUR SPECIALIST</h2>
+                    <h2>ABOUT US</h2>
                 </div>
                 <p class="main_description" style="color:#fff">Mature and very kind person, has a passion to elderly people, and  people with disabilities. I want to help those who are staying with them in their houses and leaving them with care takers with no experience.
                     <br><br> I am available 24 hrs 7/7. I drive to your house or home for the aged and visit. I take them out to change the environment. For any other questions please <a href="#contact">contact us</a>.</p>
@@ -51,7 +51,7 @@ ob_start();
                                 <i class="fa fa-star" aria-hidden="true"></i>
                                 <i class="fa fa-star" aria-hidden="true"></i>
                             </div>
-                            <div class="review_author">Sr Lilian Naomi, Rwanda</div>
+                            <div class="review_author">Md Lilian Naomi, Rwanda</div>
                         </div>
                     </div>
                 </div>

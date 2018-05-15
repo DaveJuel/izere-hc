@@ -21,9 +21,9 @@
                 <li class="dropdown simple_menu active">
                     <a href="#slider">HOME </a>
                 </li>                
-                <li class="dropdown mega_menu mega_menu_fullwidth"><a href="#features" aria-expanded="true">WHAT WE DO</a>
+                <li class="dropdown mega_menu mega_menu_fullwidth"><a href="#features" aria-expanded="true">OUR SERVICES</a>
                 </li>
-                <li><a href="#testimonials">WHO WE ARE</a></li>                
+                <li><a href="#testimonials">ABOUT US</a></li>                
                 <li><a href="#contact">CONTACT US</a></li>                
                 <li class="menu_button">
                     <a href="../dashboard/views/login.php" class="button  btn_yellow"><i class="fa fa-sign-in"></i>SIGN IN</a>
