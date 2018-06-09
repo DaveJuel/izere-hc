@@ -6,20 +6,23 @@ session_start();
  * Created by: David NIWEWE
  *
  */
-/*
- * TODO: You need to replace username and password by your specific db credentials
- */
 require 'rb.php';
 require 'config.php';
 require 'sectionFormat.php';
+//require_once "../../vendor/autoload.php";
+require 'SMTP.php';
+require 'PHPMailer.php';
 $connection = new connection();
-R::setup("mysql:host=$connection->host;dbname=$connection->db", "$connection->db_user", "$connection->pass_phrase");
+R::setup("pgsql:host=$connection->host;dbname=$connection->db", $connection->db_user, $connection->pass_phrase);
+
+//to allow underscores in table creation
 R::ext('xdispense', function ($type) {
     return R::getRedBean()->dispense($type);
 });
+
 $main = new main();
-class UIfeeders
-{
+
+class UIfeeders {
 
     public $instance;
     public $field;
@@ -33,8 +36,7 @@ class UIfeeders
      * @param String $defValue The value to hold
      * @param String $defDisplay The value to display
      */
-    public function comboBuilder($content, $defValue, $defDisplay)
-    {
+    public function comboBuilder($content, $defValue, $defDisplay) {
         if (count($content) > 1) {
             echo "<option>-- Select " . strtolower(str_replace("_", " ", $defValue)) . "--</option>";
         }
@@ -52,12 +54,13 @@ class UIfeeders
      * @param String $instance The instance to edit
      * @param String $field Description
      */
-    public function feedModal($instance, $subject)
-    {
-        $this->instance = $instance;
-        $this->field = $subject;
+    public function feedModal($subject, $occurenceId) {
+        $subjectObj = new subject();
+        $subjectId = $subjectObj->getId($subject);
         $component = new main();
-        $component->formBuilder($subject, "update");
+        $component->subjectOccurenceId = $occurenceId;
+        $component->subjectTitle = $subject;
+        $component->formBuilder($subjectId, "update");
     }
 
     /**
@@ -65,19 +68,17 @@ class UIfeeders
      * <p>Verifies if datatype is table</p>
      * @param String $dataType The data type to be verified
      */
-    public function isDataTypeTable($dataType)
-    {
+    public function isDataTypeTable($dataType) {
         $isTable = false;
         $mainObj = new main();
         $schema = $mainObj->dbname;
         if (isset($dataType)) {
             try {
-                $tableList = R::getAll("SELECT TABLE_NAME
-                                FROM INFORMATION_SCHEMA.TABLES
-                                WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA='$schema'");
+                $tableList = R::getAll("SELECT table_name FROM information_schema.tables
+                WHERE table_catalog = '$schema' AND table_schema   = 'public'");
                 if (count($tableList) > 0) {
                     for ($count = 0; $count < count($tableList); $count++) {
-                        if ($tableList[$count]['TABLE_NAME'] == $dataType) {
+                        if ($tableList[$count]['table_name'] == $dataType) {
                             $isTable = true;
                             break;
                         }
@@ -95,16 +96,19 @@ class UIfeeders
      * <p>Verifies if datatype is column</p>
      * @param String $dataType the data type to be verified
      */
-    public function isDataTypeColumn($dataType)
-    {
+    public function isDataTypeColumn($dataType) {
         $isColumn = false;
+        $mainObj = new main();
+        $schema = $mainObj->dbname;
         if (isset($dataType)) {
             try {
-                $columnList = R::getAll("SELECT COLUMN_NAME
-                                      FROM INFORMATION_SCHEMA.COLUMNS");
+                $columnList = R::getAll("SELECT column_name
+                                    FROM information_schema.columns
+                                    WHERE table_catalog = '$schema'
+                                    AND table_schema   = 'public'");
                 if (count($columnList) > 0) {
                     for ($count = 0; $count < count($columnList); $count++) {
-                        if ($columnList[$count]['COLUMN_NAME'] == $dataType) {
+                        if ($columnList[$count]['column_name'] == $dataType) {
                             $isColumn = true;
                             break;
                         }
@@ -122,12 +126,11 @@ class UIfeeders
      * <p>Verifies if data type is valid</p>
      * @param String $dataType the data type to be verified
      */
-    public function isDataTypeDefault($dataType)
-    {
+    public function isDataTypeDefault($dataType) {
         $isDefault = false;
         $dataType = strtolower($dataType);
         if (isset($dataType) &&
-            ($dataType == "text" || $dataType == "numeric" || $dataType == "date") || $dataType == "file" || $dataType == "long text") {
+                ($dataType == "text" || $dataType == "numeric" || $dataType == "date") || $dataType == "file" || $dataType == "unique text" || $dataType == "long text" || $dataType == "password") {
             $isDefault = true;
         }
         return $isDefault;
@@ -140,15 +143,13 @@ class UIfeeders
  * <p>This is the main method with all utilities used by the application.</p>
  * <p>It extends {@link UIfeeders The class that handles UI content}</p>
  */
-class main extends UIfeeders
-{
+class main extends UIfeeders {
 
     public $status;
     public $appName = APP_NAME;
     public $author = APP_AUTHOR;
 
-    public function __construct()
-    {
+    public function __construct() {
         $connection = new connection();
         $this->dbname = $connection->db;
     }
@@ -159,8 +160,7 @@ class main extends UIfeeders
      * @param Integer $status The status of the message
      * @param String $text the message to be displayed on the screen
      */
-    public function feedbackFormat($status, $text)
-    {
+    public function feedbackFormat($status, $text) {
         $feedback = "";
         /*
          * status = 0 => failure
@@ -184,8 +184,7 @@ class main extends UIfeeders
         return $feedback;
     }
 
-    public function displayMessageTable($header, $message, $action)
-    {
+    public function displayMessageTable($header, $message, $action) {
         /*
          * Start table
          */
@@ -259,22 +258,23 @@ class main extends UIfeeders
      * @param Array $body Content of the table
      * @param Boolean $action Set to true to activate editing or delete
      */
-    public function displayTable($header, $body, $action)
-    {
+    public function displayTable($header, $body, $action) {
         /*
          * start table
          */
         echo "<div class='panel-body'>";
         echo "<div class='table-responsive'>";
-        echo "<table class='display table table-striped table-bordered table-hover' style='width: 100%; cellspacing: 0;' id='example'>";
+        echo "<table class='details-table-view display table table-striped table-bordered table-hover' style='width: 100%; cellspacing: 0;'>";
 
         /*
          * display headers
          */
         echo "<thead>";
         for ($count = 0; $count < count($header); $count++) {
-            echo "<th>" . $header[$count] . "</th>";
+            $headerTitle = str_replace("_", " ", $header[$count]);
+            echo "<th>" . $headerTitle . "</th>";
         }
+        //by default show the action
         if (!isset($action) || $action == true) {
             echo '<th>Action</th>';
         }
@@ -283,14 +283,14 @@ class main extends UIfeeders
          * table body
          */
         echo "<tbody>";
-        for ($row = 0; $row < count($body); $row++) { //row
+        for ($row = 0; null !== $body && $row < count($body); $row++) { //row
             echo "<tr>";
             for ($col = 1; $col <= count($header); $col++) {
                 echo "<td>" . $body[$row][$col] . "</td>";
             }
             //action
             if (!isset($action) || $action == true) {
-                $this->tableAction($body[$row][1]);
+                $this->tableAction($body[$row][0]);
             }
             echo "</tr>";
         }
@@ -308,15 +308,14 @@ class main extends UIfeeders
      * <p>This method defines the action on each table item.</p>
      * @param Integer $rowId The  id of the item on the table ID
      */
-    private function tableAction($rowId)
-    {
+    private function tableAction($rowId) {
         echo "<td>" .
-            "<a class='btn btn-info' data-toggle='modal' data-target='#editModal' title='Edit' data-table_data='$rowId'>
+        "<a class='open-UpdateItemDialog btn btn-info' data-toggle='modal' data-target='#editModal' title='Edit' data-table_data='$rowId'>
 		 <i class='fa fa-pencil fa-fw'></i>
 		</a>  " . "  <a class='open-DeleteItemDialog btn btn-danger' data-toggle='modal' data-target='#deleteModal' title='Remove'  data-table_data='$rowId'>
 		<i class='fa fa-remove fa-fw'></i>
 		</a>" .
-            "</td>";
+        "</td>";
     }
 
     /**
@@ -324,17 +323,22 @@ class main extends UIfeeders
      * <p>This is the method that generates links for the application.</p>
      * @param String $action This is the action assigned to the link.
      */
-    public function makeLinks($action)
-    {
+    public function makeLinks($action) {
         try {
-            $subjects = R::getAll("SELECT id,title FROM subject ");
+            $userObj = new user();
+            if (isset($_SESSION["username"]) && $userObj->getUserType($_SESSION["username"]) == "author") {
+                $subjects = R::getAll("SELECT id,title,type FROM subject WHERE type='single' OR type='container'");
+            } else {
+                $subjects = R::getAll("SELECT id,title,type FROM subject WHERE type='single' OR type='container'");
+            }
             if (count($subjects) > 0) {
-                for ($count = 0; $count < count($subjects); $count++) {
+                for ($count = 0; null !== $subjects && $count < count($subjects); $count++) {
                     $subjectId = $subjects[$count]['id'];
                     $subjectTitle = $subjects[$count]['title'];
                     $user = new user();
                     if ($user->isUserAllowed($action, $subjectTitle)) {
-                        echo "<li><a href='" . $action . "_article.php?article=$subjectId'>" . $subjectTitle . "</a></li>";
+                        $subjectTitle = str_replace("_", " ", $subjectTitle);
+                        echo "<li><a href='" . $action . "_details.php?article=$subjectId'>" . $subjectTitle . "</a></li>";
                     }
                 }
             }
@@ -344,256 +348,11 @@ class main extends UIfeeders
     }
 
     /**
-     * <h1>listCountries</h1>
-     * <p>Generating the list of countries</p>
-     */
-    public function listCountries()
-    {
-        $countries = array();
-        $countries[] = array("code" => "AF", "name" => "Afghanistan", "d_code" => "+93");
-        $countries[] = array("code" => "AL", "name" => "Albania", "d_code" => "+355");
-        $countries[] = array("code" => "DZ", "name" => "Algeria", "d_code" => "+213");
-        $countries[] = array("code" => "AS", "name" => "American Samoa", "d_code" => "+1");
-        $countries[] = array("code" => "AD", "name" => "Andorra", "d_code" => "+376");
-        $countries[] = array("code" => "AO", "name" => "Angola", "d_code" => "+244");
-        $countries[] = array("code" => "AI", "name" => "Anguilla", "d_code" => "+1");
-        $countries[] = array("code" => "AG", "name" => "Antigua", "d_code" => "+1");
-        $countries[] = array("code" => "AR", "name" => "Argentina", "d_code" => "+54");
-        $countries[] = array("code" => "AM", "name" => "Armenia", "d_code" => "+374");
-        $countries[] = array("code" => "AW", "name" => "Aruba", "d_code" => "+297");
-        $countries[] = array("code" => "AU", "name" => "Australia", "d_code" => "+61");
-        $countries[] = array("code" => "AT", "name" => "Austria", "d_code" => "+43");
-        $countries[] = array("code" => "AZ", "name" => "Azerbaijan", "d_code" => "+994");
-        $countries[] = array("code" => "BH", "name" => "Bahrain", "d_code" => "+973");
-        $countries[] = array("code" => "BD", "name" => "Bangladesh", "d_code" => "+880");
-        $countries[] = array("code" => "BB", "name" => "Barbados", "d_code" => "+1");
-        $countries[] = array("code" => "BY", "name" => "Belarus", "d_code" => "+375");
-        $countries[] = array("code" => "BE", "name" => "Belgium", "d_code" => "+32");
-        $countries[] = array("code" => "BZ", "name" => "Belize", "d_code" => "+501");
-        $countries[] = array("code" => "BJ", "name" => "Benin", "d_code" => "+229");
-        $countries[] = array("code" => "BM", "name" => "Bermuda", "d_code" => "+1");
-        $countries[] = array("code" => "BT", "name" => "Bhutan", "d_code" => "+975");
-        $countries[] = array("code" => "BO", "name" => "Bolivia", "d_code" => "+591");
-        $countries[] = array("code" => "BA", "name" => "Bosnia and Herzegovina", "d_code" => "+387");
-        $countries[] = array("code" => "BW", "name" => "Botswana", "d_code" => "+267");
-        $countries[] = array("code" => "BR", "name" => "Brazil", "d_code" => "+55");
-        $countries[] = array("code" => "IO", "name" => "British Indian Ocean Territory", "d_code" => "+246");
-        $countries[] = array("code" => "VG", "name" => "British Virgin Islands", "d_code" => "+1");
-        $countries[] = array("code" => "BN", "name" => "Brunei", "d_code" => "+673");
-        $countries[] = array("code" => "BG", "name" => "Bulgaria", "d_code" => "+359");
-        $countries[] = array("code" => "BF", "name" => "Burkina Faso", "d_code" => "+226");
-        $countries[] = array("code" => "MM", "name" => "Burma Myanmar", "d_code" => "+95");
-        $countries[] = array("code" => "BI", "name" => "Burundi", "d_code" => "+257");
-        $countries[] = array("code" => "KH", "name" => "Cambodia", "d_code" => "+855");
-        $countries[] = array("code" => "CM", "name" => "Cameroon", "d_code" => "+237");
-        $countries[] = array("code" => "CA", "name" => "Canada", "d_code" => "+1");
-        $countries[] = array("code" => "CV", "name" => "Cape Verde", "d_code" => "+238");
-        $countries[] = array("code" => "KY", "name" => "Cayman Islands", "d_code" => "+1");
-        $countries[] = array("code" => "CF", "name" => "Central African Republic", "d_code" => "+236");
-        $countries[] = array("code" => "TD", "name" => "Chad", "d_code" => "+235");
-        $countries[] = array("code" => "CL", "name" => "Chile", "d_code" => "+56");
-        $countries[] = array("code" => "CN", "name" => "China", "d_code" => "+86");
-        $countries[] = array("code" => "CO", "name" => "Colombia", "d_code" => "+57");
-        $countries[] = array("code" => "KM", "name" => "Comoros", "d_code" => "+269");
-        $countries[] = array("code" => "CK", "name" => "Cook Islands", "d_code" => "+682");
-        $countries[] = array("code" => "CR", "name" => "Costa Rica", "d_code" => "+506");
-        $countries[] = array("code" => "CI", "name" => "Côte d'Ivoire", "d_code" => "+225");
-        $countries[] = array("code" => "HR", "name" => "Croatia", "d_code" => "+385");
-        $countries[] = array("code" => "CU", "name" => "Cuba", "d_code" => "+53");
-        $countries[] = array("code" => "CY", "name" => "Cyprus", "d_code" => "+357");
-        $countries[] = array("code" => "CZ", "name" => "Czech Republic", "d_code" => "+420");
-        $countries[] = array("code" => "CD", "name" => "Democratic Republic of Congo", "d_code" => "+243");
-        $countries[] = array("code" => "DK", "name" => "Denmark", "d_code" => "+45");
-        $countries[] = array("code" => "DJ", "name" => "Djibouti", "d_code" => "+253");
-        $countries[] = array("code" => "DM", "name" => "Dominica", "d_code" => "+1");
-        $countries[] = array("code" => "DO", "name" => "Dominican Republic", "d_code" => "+1");
-        $countries[] = array("code" => "EC", "name" => "Ecuador", "d_code" => "+593");
-        $countries[] = array("code" => "EG", "name" => "Egypt", "d_code" => "+20");
-        $countries[] = array("code" => "SV", "name" => "El Salvador", "d_code" => "+503");
-        $countries[] = array("code" => "GQ", "name" => "Equatorial Guinea", "d_code" => "+240");
-        $countries[] = array("code" => "ER", "name" => "Eritrea", "d_code" => "+291");
-        $countries[] = array("code" => "EE", "name" => "Estonia", "d_code" => "+372");
-        $countries[] = array("code" => "ET", "name" => "Ethiopia", "d_code" => "+251");
-        $countries[] = array("code" => "FK", "name" => "Falkland Islands", "d_code" => "+500");
-        $countries[] = array("code" => "FO", "name" => "Faroe Islands", "d_code" => "+298");
-        $countries[] = array("code" => "FM", "name" => "Federated States of Micronesia", "d_code" => "+691");
-        $countries[] = array("code" => "FJ", "name" => "Fiji", "d_code" => "+679");
-        $countries[] = array("code" => "FI", "name" => "Finland", "d_code" => "+358");
-        $countries[] = array("code" => "FR", "name" => "France", "d_code" => "+33");
-        $countries[] = array("code" => "GF", "name" => "French Guiana", "d_code" => "+594");
-        $countries[] = array("code" => "PF", "name" => "French Polynesia", "d_code" => "+689");
-        $countries[] = array("code" => "GA", "name" => "Gabon", "d_code" => "+241");
-        $countries[] = array("code" => "GE", "name" => "Georgia", "d_code" => "+995");
-        $countries[] = array("code" => "DE", "name" => "Germany", "d_code" => "+49");
-        $countries[] = array("code" => "GH", "name" => "Ghana", "d_code" => "+233");
-        $countries[] = array("code" => "GI", "name" => "Gibraltar", "d_code" => "+350");
-        $countries[] = array("code" => "GR", "name" => "Greece", "d_code" => "+30");
-        $countries[] = array("code" => "GL", "name" => "Greenland", "d_code" => "+299");
-        $countries[] = array("code" => "GD", "name" => "Grenada", "d_code" => "+1");
-        $countries[] = array("code" => "GP", "name" => "Guadeloupe", "d_code" => "+590");
-        $countries[] = array("code" => "GU", "name" => "Guam", "d_code" => "+1");
-        $countries[] = array("code" => "GT", "name" => "Guatemala", "d_code" => "+502");
-        $countries[] = array("code" => "GN", "name" => "Guinea", "d_code" => "+224");
-        $countries[] = array("code" => "GW", "name" => "Guinea-Bissau", "d_code" => "+245");
-        $countries[] = array("code" => "GY", "name" => "Guyana", "d_code" => "+592");
-        $countries[] = array("code" => "HT", "name" => "Haiti", "d_code" => "+509");
-        $countries[] = array("code" => "HN", "name" => "Honduras", "d_code" => "+504");
-        $countries[] = array("code" => "HK", "name" => "Hong Kong", "d_code" => "+852");
-        $countries[] = array("code" => "HU", "name" => "Hungary", "d_code" => "+36");
-        $countries[] = array("code" => "IS", "name" => "Iceland", "d_code" => "+354");
-        $countries[] = array("code" => "IN", "name" => "India", "d_code" => "+91");
-        $countries[] = array("code" => "ID", "name" => "Indonesia", "d_code" => "+62");
-        $countries[] = array("code" => "IR", "name" => "Iran", "d_code" => "+98");
-        $countries[] = array("code" => "IQ", "name" => "Iraq", "d_code" => "+964");
-        $countries[] = array("code" => "IE", "name" => "Ireland", "d_code" => "+353");
-        $countries[] = array("code" => "IL", "name" => "Israel", "d_code" => "+972");
-        $countries[] = array("code" => "IT", "name" => "Italy", "d_code" => "+39");
-        $countries[] = array("code" => "JM", "name" => "Jamaica", "d_code" => "+1");
-        $countries[] = array("code" => "JP", "name" => "Japan", "d_code" => "+81");
-        $countries[] = array("code" => "JO", "name" => "Jordan", "d_code" => "+962");
-        $countries[] = array("code" => "KZ", "name" => "Kazakhstan", "d_code" => "+7");
-        $countries[] = array("code" => "KE", "name" => "Kenya", "d_code" => "+254");
-        $countries[] = array("code" => "KI", "name" => "Kiribati", "d_code" => "+686");
-        $countries[] = array("code" => "XK", "name" => "Kosovo", "d_code" => "+381");
-        $countries[] = array("code" => "KW", "name" => "Kuwait", "d_code" => "+965");
-        $countries[] = array("code" => "KG", "name" => "Kyrgyzstan", "d_code" => "+996");
-        $countries[] = array("code" => "LA", "name" => "Laos", "d_code" => "+856");
-        $countries[] = array("code" => "LV", "name" => "Latvia", "d_code" => "+371");
-        $countries[] = array("code" => "LB", "name" => "Lebanon", "d_code" => "+961");
-        $countries[] = array("code" => "LS", "name" => "Lesotho", "d_code" => "+266");
-        $countries[] = array("code" => "LR", "name" => "Liberia", "d_code" => "+231");
-        $countries[] = array("code" => "LY", "name" => "Libya", "d_code" => "+218");
-        $countries[] = array("code" => "LI", "name" => "Liechtenstein", "d_code" => "+423");
-        $countries[] = array("code" => "LT", "name" => "Lithuania", "d_code" => "+370");
-        $countries[] = array("code" => "LU", "name" => "Luxembourg", "d_code" => "+352");
-        $countries[] = array("code" => "MO", "name" => "Macau", "d_code" => "+853");
-        $countries[] = array("code" => "MK", "name" => "Macedonia", "d_code" => "+389");
-        $countries[] = array("code" => "MG", "name" => "Madagascar", "d_code" => "+261");
-        $countries[] = array("code" => "MW", "name" => "Malawi", "d_code" => "+265");
-        $countries[] = array("code" => "MY", "name" => "Malaysia", "d_code" => "+60");
-        $countries[] = array("code" => "MV", "name" => "Maldives", "d_code" => "+960");
-        $countries[] = array("code" => "ML", "name" => "Mali", "d_code" => "+223");
-        $countries[] = array("code" => "MT", "name" => "Malta", "d_code" => "+356");
-        $countries[] = array("code" => "MH", "name" => "Marshall Islands", "d_code" => "+692");
-        $countries[] = array("code" => "MQ", "name" => "Martinique", "d_code" => "+596");
-        $countries[] = array("code" => "MR", "name" => "Mauritania", "d_code" => "+222");
-        $countries[] = array("code" => "MU", "name" => "Mauritius", "d_code" => "+230");
-        $countries[] = array("code" => "YT", "name" => "Mayotte", "d_code" => "+262");
-        $countries[] = array("code" => "MX", "name" => "Mexico", "d_code" => "+52");
-        $countries[] = array("code" => "MD", "name" => "Moldova", "d_code" => "+373");
-        $countries[] = array("code" => "MC", "name" => "Monaco", "d_code" => "+377");
-        $countries[] = array("code" => "MN", "name" => "Mongolia", "d_code" => "+976");
-        $countries[] = array("code" => "ME", "name" => "Montenegro", "d_code" => "+382");
-        $countries[] = array("code" => "MS", "name" => "Montserrat", "d_code" => "+1");
-        $countries[] = array("code" => "MA", "name" => "Morocco", "d_code" => "+212");
-        $countries[] = array("code" => "MZ", "name" => "Mozambique", "d_code" => "+258");
-        $countries[] = array("code" => "NA", "name" => "Namibia", "d_code" => "+264");
-        $countries[] = array("code" => "NR", "name" => "Nauru", "d_code" => "+674");
-        $countries[] = array("code" => "NP", "name" => "Nepal", "d_code" => "+977");
-        $countries[] = array("code" => "NL", "name" => "Netherlands", "d_code" => "+31");
-        $countries[] = array("code" => "AN", "name" => "Netherlands Antilles", "d_code" => "+599");
-        $countries[] = array("code" => "NC", "name" => "New Caledonia", "d_code" => "+687");
-        $countries[] = array("code" => "NZ", "name" => "New Zealand", "d_code" => "+64");
-        $countries[] = array("code" => "NI", "name" => "Nicaragua", "d_code" => "+505");
-        $countries[] = array("code" => "NE", "name" => "Niger", "d_code" => "+227");
-        $countries[] = array("code" => "NG", "name" => "Nigeria", "d_code" => "+234");
-        $countries[] = array("code" => "NU", "name" => "Niue", "d_code" => "+683");
-        $countries[] = array("code" => "NF", "name" => "Norfolk Island", "d_code" => "+672");
-        $countries[] = array("code" => "KP", "name" => "North Korea", "d_code" => "+850");
-        $countries[] = array("code" => "MP", "name" => "Northern Mariana Islands", "d_code" => "+1");
-        $countries[] = array("code" => "NO", "name" => "Norway", "d_code" => "+47");
-        $countries[] = array("code" => "OM", "name" => "Oman", "d_code" => "+968");
-        $countries[] = array("code" => "PK", "name" => "Pakistan", "d_code" => "+92");
-        $countries[] = array("code" => "PW", "name" => "Palau", "d_code" => "+680");
-        $countries[] = array("code" => "PS", "name" => "Palestine", "d_code" => "+970");
-        $countries[] = array("code" => "PA", "name" => "Panama", "d_code" => "+507");
-        $countries[] = array("code" => "PG", "name" => "Papua New Guinea", "d_code" => "+675");
-        $countries[] = array("code" => "PY", "name" => "Paraguay", "d_code" => "+595");
-        $countries[] = array("code" => "PE", "name" => "Peru", "d_code" => "+51");
-        $countries[] = array("code" => "PH", "name" => "Philippines", "d_code" => "+63");
-        $countries[] = array("code" => "PL", "name" => "Poland", "d_code" => "+48");
-        $countries[] = array("code" => "PT", "name" => "Portugal", "d_code" => "+351");
-        $countries[] = array("code" => "PR", "name" => "Puerto Rico", "d_code" => "+1");
-        $countries[] = array("code" => "QA", "name" => "Qatar", "d_code" => "+974");
-        $countries[] = array("code" => "CG", "name" => "Republic of the Congo", "d_code" => "+242");
-        $countries[] = array("code" => "RE", "name" => "Réunion", "d_code" => "+262");
-        $countries[] = array("code" => "RO", "name" => "Romania", "d_code" => "+40");
-        $countries[] = array("code" => "RU", "name" => "Russia", "d_code" => "+7");
-        $countries[] = array("code" => "RW", "name" => "Rwanda", "d_code" => "+250");
-        $countries[] = array("code" => "BL", "name" => "Saint Barthélemy", "d_code" => "+590");
-        $countries[] = array("code" => "SH", "name" => "Saint Helena", "d_code" => "+290");
-        $countries[] = array("code" => "KN", "name" => "Saint Kitts and Nevis", "d_code" => "+1");
-        $countries[] = array("code" => "MF", "name" => "Saint Martin", "d_code" => "+590");
-        $countries[] = array("code" => "PM", "name" => "Saint Pierre and Miquelon", "d_code" => "+508");
-        $countries[] = array("code" => "VC", "name" => "Saint Vincent and the Grenadines", "d_code" => "+1");
-        $countries[] = array("code" => "WS", "name" => "Samoa", "d_code" => "+685");
-        $countries[] = array("code" => "SM", "name" => "San Marino", "d_code" => "+378");
-        $countries[] = array("code" => "ST", "name" => "São Tomé and Príncipe", "d_code" => "+239");
-        $countries[] = array("code" => "SA", "name" => "Saudi Arabia", "d_code" => "+966");
-        $countries[] = array("code" => "SN", "name" => "Senegal", "d_code" => "+221");
-        $countries[] = array("code" => "RS", "name" => "Serbia", "d_code" => "+381");
-        $countries[] = array("code" => "SC", "name" => "Seychelles", "d_code" => "+248");
-        $countries[] = array("code" => "SL", "name" => "Sierra Leone", "d_code" => "+232");
-        $countries[] = array("code" => "SG", "name" => "Singapore", "d_code" => "+65");
-        $countries[] = array("code" => "SK", "name" => "Slovakia", "d_code" => "+421");
-        $countries[] = array("code" => "SI", "name" => "Slovenia", "d_code" => "+386");
-        $countries[] = array("code" => "SB", "name" => "Solomon Islands", "d_code" => "+677");
-        $countries[] = array("code" => "SO", "name" => "Somalia", "d_code" => "+252");
-        $countries[] = array("code" => "ZA", "name" => "South Africa", "d_code" => "+27");
-        $countries[] = array("code" => "KR", "name" => "South Korea", "d_code" => "+82");
-        $countries[] = array("code" => "ES", "name" => "Spain", "d_code" => "+34");
-        $countries[] = array("code" => "LK", "name" => "Sri Lanka", "d_code" => "+94");
-        $countries[] = array("code" => "LC", "name" => "St. Lucia", "d_code" => "+1");
-        $countries[] = array("code" => "SD", "name" => "Sudan", "d_code" => "+249");
-        $countries[] = array("code" => "SR", "name" => "Suriname", "d_code" => "+597");
-        $countries[] = array("code" => "SZ", "name" => "Swaziland", "d_code" => "+268");
-        $countries[] = array("code" => "SE", "name" => "Sweden", "d_code" => "+46");
-        $countries[] = array("code" => "CH", "name" => "Switzerland", "d_code" => "+41");
-        $countries[] = array("code" => "SY", "name" => "Syria", "d_code" => "+963");
-        $countries[] = array("code" => "TW", "name" => "Taiwan", "d_code" => "+886");
-        $countries[] = array("code" => "TJ", "name" => "Tajikistan", "d_code" => "+992");
-        $countries[] = array("code" => "TZ", "name" => "Tanzania", "d_code" => "+255");
-        $countries[] = array("code" => "TH", "name" => "Thailand", "d_code" => "+66");
-        $countries[] = array("code" => "BS", "name" => "The Bahamas", "d_code" => "+1");
-        $countries[] = array("code" => "GM", "name" => "The Gambia", "d_code" => "+220");
-        $countries[] = array("code" => "TL", "name" => "Timor-Leste", "d_code" => "+670");
-        $countries[] = array("code" => "TG", "name" => "Togo", "d_code" => "+228");
-        $countries[] = array("code" => "TK", "name" => "Tokelau", "d_code" => "+690");
-        $countries[] = array("code" => "TO", "name" => "Tonga", "d_code" => "+676");
-        $countries[] = array("code" => "TT", "name" => "Trinidad and Tobago", "d_code" => "+1");
-        $countries[] = array("code" => "TN", "name" => "Tunisia", "d_code" => "+216");
-        $countries[] = array("code" => "TR", "name" => "Turkey", "d_code" => "+90");
-        $countries[] = array("code" => "TM", "name" => "Turkmenistan", "d_code" => "+993");
-        $countries[] = array("code" => "TC", "name" => "Turks and Caicos Islands", "d_code" => "+1");
-        $countries[] = array("code" => "TV", "name" => "Tuvalu", "d_code" => "+688");
-        $countries[] = array("code" => "UG", "name" => "Uganda", "d_code" => "+256");
-        $countries[] = array("code" => "UA", "name" => "Ukraine", "d_code" => "+380");
-        $countries[] = array("code" => "AE", "name" => "United Arab Emirates", "d_code" => "+971");
-        $countries[] = array("code" => "GB", "name" => "United Kingdom", "d_code" => "+44");
-        $countries[] = array("code" => "US", "name" => "United States", "d_code" => "+1");
-        $countries[] = array("code" => "UY", "name" => "Uruguay", "d_code" => "+598");
-        $countries[] = array("code" => "VI", "name" => "US Virgin Islands", "d_code" => "+1");
-        $countries[] = array("code" => "UZ", "name" => "Uzbekistan", "d_code" => "+998");
-        $countries[] = array("code" => "VU", "name" => "Vanuatu", "d_code" => "+678");
-        $countries[] = array("code" => "VA", "name" => "Vatican City", "d_code" => "+39");
-        $countries[] = array("code" => "VE", "name" => "Venezuela", "d_code" => "+58");
-        $countries[] = array("code" => "VN", "name" => "Vietnam", "d_code" => "+84");
-        $countries[] = array("code" => "WF", "name" => "Wallis and Futuna", "d_code" => "+681");
-        $countries[] = array("code" => "YE", "name" => "Yemen", "d_code" => "+967");
-        $countries[] = array("code" => "ZM", "name" => "Zambia", "d_code" => "+260");
-        $countries[] = array("code" => "ZW", "name" => "Zimbabwe", "d_code" => "+263");
-        for ($i = 0; $i < count($countries); $i++) {
-            echo "<option value='" . $countries[$i]["d_code"] . "|" . $countries[$i]["name"] . "'>" . $countries[$i]["name"] . "</option>";
-        }
-    }
-
-    /**
      * <h1>header</h1>
      * <p>This is the method to display the header of the page</p>
      * @param Int $subject The ID of the subject to refer to.
      */
-    public function header($subject)
-    {
+    public function header($subject) {
         $head = "";
         try {
             $subject = $subject;
@@ -610,22 +369,60 @@ class main extends UIfeeders
     }
 
     /**
+     * creating tabs
+     *
+     */
+    public function tabBuilder($subjectTitle) {
+        if (isset($subjectTitle)) {
+            $subjectObj = new subject();
+            $tabsList = $subjectObj->getChildSubjectList($subjectTitle);
+            $this->tabCreator($tabsList);
+        }
+    }
+
+    /**
+     * Creating tabs
+     *
+     */
+    private function tabCreator($tabsList) {
+        if (null !== $tabsList && count($tabsList) > 0) {
+            for ($counter = 0; $counter < count($tabsList); $counter++) {
+                $isActive = "";
+                if ($counter == 0) {
+                    $isActive = "active";
+                }
+                $tabTitle = str_replace("_", " ", $tabsList[$counter]['title']);
+                echo '<li class="$isActive">';
+                echo '<a href="#' . $tabsList[$counter]['title'] . '" data-toggle="tab">' . $tabTitle . '</a>';
+                echo '</li>';
+            }
+        }
+    }
+
+    /**
      * <h1>formBuilder</h1>
      * <p>This form is the build the form input</p>
      * @param Integer $subjectId This the ID of the subject being viewed
      * @param String $caller The calling environment
      */
-    public function formBuilder($subjectId, $caller)
-    {
+    public function formBuilder($subjectId, $caller) {
 
         $title = "";
         try {
-            $subjectId = $subjectId;
-            $subject = R::getAll("SELECT title,attr_number FROM subject WHERE id='$subjectId'");
-            if (count($subject) > 0) {
-                if (!$this->formInterface($subject, $subjectId, $caller)) {
+
+            if (!empty($subjectId)) {
+                $subjectId = $subjectId;
+                $userObj = new user();
+                $userType = $userObj->getUserType($_SESSION['username']);
+                $subject = R::getAll("SELECT title,attr_number FROM subject WHERE id='$subjectId'");
+                if (count($subject) > 0) {
+                    if (!$this->formInterface($subject, $subjectId, $caller)) {
+                        $this->status = $this->feedbackFormat(0, "ERROR: form can not be built!");
+                        error_log("ERROR: -> CLASS:main FUNCTION:formBuilder ---- formInterface failure");
+                    }
+                } else {
                     $this->status = $this->feedbackFormat(0, "ERROR: form can not be built!");
-                    error_log("ERROR: -> CLASS:main FUNCTION:formBuilder ---- formInterface failure");
+                    error_log("ERROR: -> CLASS:main FUNCTION:formBuilder ---- no subject available");
                 }
             } else {
                 $this->status = $this->feedbackFormat(0, "ERROR: form can not be built!");
@@ -640,8 +437,7 @@ class main extends UIfeeders
      * <h1>formInterface</h1>
      * making the form structure
      */
-    private function formInterface($subject, $subjectId, $caller)
-    {
+    private function formInterface($subject, $subjectId, $caller) {
         $built = false;
         $attrNumber = $subject[0]['attr_number'];
         $subjectObj = new subject();
@@ -662,7 +458,7 @@ class main extends UIfeeders
             }
             if ($caller == "add") {
                 echo "<div class='form-group'>";
-                echo "<input type='submit' class='btn btn-dark' id='save-article' onclick='saveArticle();' name='action' value='Save'>";
+                echo "<input type='submit' class='btn btn-dark' id='save-$subjectId' onclick='saveArticle(this);' name='action' value='Save'>";
                 echo "</div>";
             }
             echo "</form>";
@@ -677,9 +473,8 @@ class main extends UIfeeders
      * <p>Generates the input for attributes with default datatypes</p>
      * @param String $name The name of the attribute
      */
-    private function inputGenerator($id, $name, $type, $caller)
-    {
-        if (isset($this->instance)) {
+    private function inputGenerator($id, $name, $type, $caller) {
+        if (isset($this->subjectOccurenceId)) {
             $value = $this->getValue($name);
             $holder = "value";
         } else {
@@ -692,6 +487,12 @@ class main extends UIfeeders
             switch ($type) {
                 case 'text':
                     $input = "<input type='text' name='$name' id='$caller" . "_" . "$name' class='form-control' $holder='$value'>";
+                    break;
+                case 'unique text':
+                    $input = "<input type='text' required name='$name' id='$caller" . "_" . "$name' class='form-control' $holder='$value'>";
+                    break;
+                case 'password':
+                    $input = "<input type='password' required name='$name' id='$caller" . "_" . "$name' class='form-control' $holder='$value'>";
                     break;
                 case 'numeric':
                     $input = "<input type='number' name='$name' id='$caller" . "_" . "$name' class='form-control' $holder='$value'>";
@@ -713,9 +514,9 @@ class main extends UIfeeders
         echo "<div class='input-group'>" . $formInput . "</div>";
     }
 
-    private function referentialDataInputGenerator($id, $name, $type, $caller)
-    {
+    private function referentialDataInputGenerator($id, $name, $type, $caller) {
         $input = "";
+        $optionString = "";
         if (isset($id) && isset($name) && isset($type)) {
             $startCombo = "<select type='date' name='$name' id='$caller" . "_" . "$name' class='form-control'>";
             $subjectObj = new subject();
@@ -726,10 +527,10 @@ class main extends UIfeeders
                     if (count($referenceValues) > 0) {
                         $optionString = "<option >Select $reference</option>";
                     } else {
-                        $optionString = "";
+                        $optionString = "<option>No choice available</option>";
                     }
                     for ($counter = 0; $counter < count($referenceValues); $counter++) {
-                        $optionString = $optionString . "<option value=" . $referenceValues[$counter] . ">" . $referenceValues[$counter] . "</option>";
+                        $optionString = $optionString . "<option value='" . $referenceValues[$counter] . "'>" . $referenceValues[$counter] . "</option>";
                     }
                 } catch (Exception $exc) {
                     error_log("ERROR(referentialDataInputGenerator):" . $e);
@@ -745,13 +546,12 @@ class main extends UIfeeders
      * <h1>feedFormValues</h1>
      * <p>This method is to set values to feed the built form.</p>
      */
-    private function getValue($col)
-    {
+    private function getValue($col) {
         $value = "Not set";
         try {
-            $instance = $this->instance;
-            $field = $this->field;
-            $value = R::getCell("SELECT DISTINCT $col FROM $field WHERE id='$instance'");
+            $occurenceId = $this->subjectOccurenceId;
+            $subject = str_replace(" ", "_", $this->subjectTitle);
+            $value = R::getCell("SELECT DISTINCT $col FROM $subject WHERE id='$occurenceId'");
         } catch (Exception $e) {
             error_log("MAIN[getValue]:" . $e);
         }
@@ -759,8 +559,7 @@ class main extends UIfeeders
     }
 
     //BUILDING THE SELECT
-    public function fetchBuilder($table, $columnList)
-    {
+    public function fetchBuilder($table, $columnList) {
         $result = null;
         $query = "";
         //building the syntax
@@ -771,7 +570,7 @@ class main extends UIfeeders
                 $query = $query . "," . str_replace(" ", "_", $columnList[$count]['name']);
             }
         }
-
+        $userObj = new user();
         $sql = "SELECT id," . $query . " FROM " . $table;
         //executing the query
         try {
@@ -780,7 +579,7 @@ class main extends UIfeeders
             $rows = array();
             for ($count = 0; $count < count($values); $count++) { //feed row
                 $columns = array();
-                $columns[0] = $values[$count]['id'];
+                $columns[0] = $table . "-" . $values[$count]['id'];
                 for ($inner = 1; $inner <= count($columnList); $inner++) { //feed column
                     $columns[$inner] = $values[$count][str_replace(" ", "_", $columnList[$inner - 1]['name'])];
                 }
@@ -797,17 +596,19 @@ class main extends UIfeeders
     }
 
     //loading the list of tables
-    public function getTables()
-    {
-        $schema = $this->dbname;
+    public function getTables($showCombo) {
+        $tableList = null;
         try {
-            $tables = R::getAll("SELECT TABLE_NAME
-                                FROM INFORMATION_SCHEMA.TABLES
-                                WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA='$schema'");
-            $this->comboBuilder($tables, "TABLE_NAME", "TABLE_NAME");
+            $mainObj = new main();
+            $schema = $mainObj->dbname;
+            $tableList = R::getAll("SELECT table_name FROM information_schema.tables WHERE table_catalog = '$schema' AND table_schema   = 'public'");
+            if (null !== $showCombo && $showCombo == true) {
+                $this->comboBuilder($tableList, "table_name", "table_name");
+            }
         } catch (Exception $e) {
             error_log("ERROR(main:getTables)" . $e);
         }
+        return $tableList;
     }
 
     /**
@@ -817,10 +618,10 @@ class main extends UIfeeders
      * </p>
      * @param String $tableName The name of the table to be specified
      */
-    public function getTableColumns($tableName)
-    {
+    public function getTableColumns($tableName) {
         $columnList = null;
         try {
+            $dbname = $this->dbname;
             if (!$this->isDataTypeTable($tableName) && isset($_SESSION['ref_data_type']) && !$this->isDataTypeColumn($tableName)) {
                 $tableName = $_SESSION['ref_data_type'];
             } else if (isset($tableName) && ($this->isDataTypeTable($tableName) && !$this->isDataTypeColumn($tableName))) {
@@ -828,32 +629,51 @@ class main extends UIfeeders
             } else if (isset($tableName) && (!$this->isDataTypeTable($tableName) && $this->isDataTypeColumn($tableName))) {
                 $_SESSION['ref_data_value'] = $columnName = $tableName;
             }
-            if (privilege_grantisset($columnName) && $this->isDataTypeColumn($columnName) && isset($_SESSION['ref_data_type'])) {
-                $columns = R::getAll("SELECT DISTINCT COLUMN_NAME
-                                      FROM INFORMATION_SCHEMA.COLUMNS
-                                      WHERE COLUMN_NAME='$columnName'");
-                $columnList[0] = array("COLUMN_NAME" => $_SESSION['ref_data_type'] . "|" . $columns[0]['COLUMN_NAME'], "COLUMN_TYPE" => $_SESSION['ref_data_type'] . " " . $columns[0]['COLUMN_NAME']);
+            if (isset($columnName) && $this->isDataTypeColumn($columnName) && isset($_SESSION['ref_data_type'])) {
+                $columnList[0] = array("column_name" => $_SESSION['ref_data_type'] . "|" . $_SESSION['ref_data_value'], "column_type" => $_SESSION['ref_data_type'] . " " . $_SESSION['ref_data_value']);
             } else {
                 $_SESSION['ref_data_type'] = $tableName;
-                $columns = R::getAll("SELECT COLUMN_NAME
-                                      FROM INFORMATION_SCHEMA.COLUMNS
-                                      WHERE TABLE_NAME='$tableName'");
+                $columns = R::getAll("SELECT column_name
+                                            FROM information_schema.columns
+                                            WHERE table_catalog = '$dbname'
+                                            AND table_schema   = 'public' AND table_name='$tableName'");
                 for ($counter = 0; $counter < count($columns); $counter++) {
-                    $columnList[$counter] = array("COLUMN_NAME" => $columns[$counter]['COLUMN_NAME'], "COLUMN_TYPE" => $_SESSION['ref_data_type'] . " " . $columns[$counter]['COLUMN_NAME']);
+                    $columnList[$counter] = array("column_name" => $columns[$counter]['column_name'], "column_type" => $_SESSION['ref_data_type'] . " " . $columns[$counter]['column_name']);
                 }
             }
-            $this->comboBuilder($columnList, "COLUMN_NAME", "COLUMN_TYPE");
+            $this->comboBuilder($columnList, "column_name", "column_type");
         } catch (Exception $exc) {
             error_log("ERROR(main:getTableColumns)" . $exc);
         }
+    }
+
+    /**
+     * isTableExisting
+     * Verifies if the tables is available and returns false or true
+     * @param String  $tableName The name of the table you want to check
+     */
+    public function isTableExisting($tableName) {
+        $tableExists = false;
+        if (isset($tableName)) {
+            $tableList = $this->getTables(false);
+            //verify if table is dropped
+            for ($counter = 0; null !== $tableList && $counter < count($tableList); $counter++) {
+                if ($tableList[$counter]['table_name'] == $tableName) {
+                    $tableExists = TRUE;
+                    break;
+                }
+            }
+        } else {
+            error_log("ERROR(isTableExisting): unable to verify no table specified");
+        }
+        return $tableExists;
     }
 
     /*
      * validating the numbers
      */
 
-    public function standardize($phone)
-    {
+    public function standardize($phone) {
         if (strlen($phone) == 10) {
             $phone = "25" . $phone;
         } else if (strlen($phone) == 9) {
@@ -869,8 +689,7 @@ class main extends UIfeeders
 }
 
 //user object
-class user extends main
-{
+class user extends main {
 
     public $fname;
     public $lname;
@@ -884,8 +703,7 @@ class user extends main
     public $count;
     public $userlist = [];
 
-    public function __construct()
-    {
+    public function __construct() {
         $this->count();
     }
 
@@ -893,29 +711,34 @@ class user extends main
      * <h1>fetch</h1>
      * <p>Counting the user of the system</p>
      */
-    public function count()
-    {
+    public function count() {
         $users = [];
-        if (isset($_SESSION['user_id'])) {
-            $userId = $_SESSION['user_id'];
-            $loggedInType = $this->getUserType($userId);
+        if (isset($_SESSION['username'])) {
+            $username = $_SESSION['username'];
+            $loggedInType = $this->getUserType($username);
             if ($loggedInType == "administrator") {
                 try {
-                    $users = R::getAll("SELECT * FROM credentials");
+                    $users = R::getAll("SELECT type FROM credentials JOIN user_profile ON credentials.user=user_profile.id");
                     $this->count = count($users);
                 } catch (Exception $e) {
                     error_log("ERROR(USER:COUNT):" . $e);
                 }
             } else {
                 try {
-                    if ($loggedInType != null) {
+
+                    if ($loggedInType != null && $loggedInType != "initial" && $loggedInType != "author") {
                         $type = R::getCell("SELECT DISTINCT id FROM role WHERE title='$loggedInType'");
-                        $users = R::getAll("SELECT * FROM credentials WHERE type='$type'");
+                        $users = R::getAll("SELECT type FROM credentials JOIN user_profile ON credentials.user=user_profile.id WHERE type='$type'");
+                        $this->count = count($users);
+                    } else if ($loggedInType == "initial") {
+                        $users = R::getAll("SELECT * FROM user_profile");
+                        $this->count = count($users);
+                    } else if ($loggedInType == "author") {
+                        $users = R::getAll("SELECT * FROM user_profile");
                         $this->count = count($users);
                     } else {
                         $this->count = "N/A";
                     }
-
                 } catch (Exception $e) {
                     error_log("ERROR(USER:COUNT):" . $e);
                 }
@@ -924,31 +747,38 @@ class user extends main
     }
 
     //getting the user
-    public function userList($type)
-    {
+    public function userList() {
         $header = array('No', 'Names', 'Email', 'Tel', 'Category');
         try {
-            if (isset($type)) {
-                $users = R::getAll("SELECT u.id,u.fname,u.lname,u.oname,u.email,u.phone,c.user,c.type FROM user AS u JOIN credentials AS c WHERE u.id=c.user AND c.type='$type'");
+            $type = $_SESSION["type"];
+            if ($type === null) {
+                error_log("ERROR:internal:Invalid user type");
             } else {
-                $users = R::getAll("SELECT u.id,u.fname,u.lname,u.oname,u.email,u.phone,c.user,c.type FROM user AS u JOIN credentials AS c WHERE u.id=c.user");
-            }
-            if (count($users) == 0) {
-                $this->displayTable($header, null, null);
-            } else {
-                $tableContent = array();
-                for ($row = 0; $row < count($users); $row++) {
-                    $rowNumber = $row + 1;
-                    $userId = $users[$row]['id'];
-                    $names = $users[$row]['fname'] . " " . $users[$row]['lname'];
-                    $email = $users[$row]['email'];
-                    $tel = $users[$row]['phone'];
-                    $type = $this->getUserType($users[$row]['id']);
-                    $tableContent[$row] = array($userId, $rowNumber, $names, $email, $tel, $type);
+                if (isset($type)) {
+                    if ($type == 0) {
+                        $users = R::getAll("SELECT user_profile.id,fname,lname,oname,email,phone,credentials.user,credentials.username,credentials.type FROM user_profile INNER JOIN credentials ON user_profile.id=credentials.user");
+                    } else {
+                        $users = R::getAll("SELECT user_profile.id,fname,lname,oname,email,phone,credentials.user,credentials.username,credentials.type FROM user_profile INNER JOIN credentials ON user_profile.id=credentials.user WHERE type='$type'");
+                    }
                 }
-                $this->displayTable($header, $tableContent, null);
+                if (count($users) == 0) {
+                    $this->displayTable($header, null, null);
+                } else {
+                    $tableContent = array();
+                    for ($row = 0; $row < count($users); $row++) {
+                        $rowNumber = $row + 1;
+                        $username = $users[$row]['id'];
+                        $names = $users[$row]['fname'] . " " . $users[$row]['lname'];
+                        $email = $users[$row]['email'];
+                        $tel = $users[$row]['phone'];
+                        $type = $this->getUserType($users[$row]['username']);
+                        $tableContent[$row] = array($username, $rowNumber, $names, $email, $tel, $type);
+                    }
+                    $this->displayTable($header, $tableContent, null);
+                }
             }
         } catch (Exception $e) {
+            error_log("UNABLE TO LOAD LIST OF USERS" . $e);
             $this->status = $this->feedbackFormat(0, "Error loading user list");
         }
     }
@@ -960,31 +790,34 @@ class user extends main
      * @param $lname the last name of the user
      * @param $oname Other name of the user
      */
-    public function add($fname, $lname, $oname, $email, $tel, $address, $username, $password, $type)
-    {
-        if ($this->isValid($username)) {
+    public function add($fname, $lname, $oname, $email, $tel, $address, $username, $password, $type) {
+        $isCreated = false;
+        if ($this->isUsernameValid($username)) {
             //saving user credentials
             try {
                 //saving user details
-                $user_details = R::dispense("user");
+                $user_details = R::xdispense("user_profile");
                 $user_details->fname = $fname;
                 $user_details->lname = $lname;
                 $user_details->oname = $oname;
                 $user_details->email = $email;
                 $user_details->phone = $tel;
                 $user_details->address = $address;
-                $userId = R::store($user_details);
-                $this->addCredentials($userId, $username, $password, $type);
+                $user_id = R::store($user_details);
+                if (isset($user_id)) {
+                    $isCreated = $this->addCredentials($user_id, $username, $password, $type);
+                }
             } catch (Exception $e) {
                 $this->status = $this->feedbackFormat(0, "User not added!" . $e);
             }
         } else {
             $this->status = $this->feedbackFormat(0, "Username already exists!");
         }
+        return $isCreated;
     }
 
-    private function addCredentials($id, $username, $password, $type)
-    {
+    private function addCredentials($id, $username, $password, $type) {
+        $isCreated = false;
         try {
             $user_credentials = R::dispense("credentials");
             $user_credentials->user = $id;
@@ -993,21 +826,37 @@ class user extends main
             $user_credentials->type = $type;
             $user_credentials->last_log = date("d-m-Y h:m:s");
             $user_credentials->status = 1;
-            R::store($user_credentials);
-            $this->status = $this->feedbackFormat(1, "User successfully added!");
+            $cred_id = R::store($user_credentials);
+            if (isset($cred_id)) {
+                $this->status = $this->feedbackFormat(1, "User successfully added!");
+                $isCreated = true;
+            } else {
+                R::exec("DELETE FROM user_profile WHERE id='$id'");
+                $this->status = $this->feedbackFormat(0, "User not added!");
+            }
         } catch (Exception $e) {
             $this->status = $this->feedbackFormat(0, "Error occured saving credentials" . $e);
         }
+        return $isCreated;
+    }
+
+    public function initialGrant($userEmail, $passcode) {
+        $initial = 1;
+        if (null !== getenv("ADDAX_AUTHOR") && null !== getenv("ADDAX_PASSCODE")) {
+            if ($userEmail === getenv("ADDAX_AUTHOR") && $passcode === getenv("ADDAX_PASSCODE")) {
+                $initial = 0;
+            }
+        }
+        return $initial;
     }
 
     /**
-     *<h1>isValid</h1>
-     *<p>This function validates id the username is valid for registration</p>
+     * <h1>isValid</h1>
+     * <p>This function validates id the username is valid for registration</p>
      * @param $username The user name to validate.
      * @return Boolean
      */
-    public function isUsernameValid($username)
-    {
+    public function isUsernameValid($username) {
         $status = true;
         try {
             $check = R::getCol("SELECT id FROM credentials WHERE username='$username'");
@@ -1027,8 +876,7 @@ class user extends main
      * @param $email the email to verify.
      * @return boolean true if email is valid
      */
-    public function isEmailValid($email)
-    {
+    public function isEmailValid($email) {
         $status = true;
         if (strpos($email, "@") === false || strpos($email, ".")) {
             $status = false;
@@ -1041,22 +889,24 @@ class user extends main
                     $this->status = "Email already exists" . $email;
                 }
             } catch (Exception $exc) {
+                error_log("UNABLE TO VALIDATE EMAIL:" . $e);
                 $status = false;
                 $this->status = "Error checking the email" . $exc;
             }
         }
         return $status;
     }
+
     //evaluating logged in user
-    private function evalLoggedUser($id, $u)
-    {
+    private function evalLoggedUser($id, $u) {
         //getting the logged in user information
         try {
-            $logged_user = R::getRow("SELECT id FROM credentials WHERE user_id = {$id} AND username ='{$u}'  AND user_status='1' LIMIT 1");
+            $logged_user = R::getRow("SELECT id FROM credentials WHERE user_id = {$id} AND username ='{$u}'  AND user_status='1'");
             if (isset($logged_user)) {
                 return true;
             }
         } catch (Exception $e) {
+            error_log("UNABLE TO VERIFY A USER:" . $e);
             return false;
         }
     }
@@ -1066,8 +916,7 @@ class user extends main
      * <p>This function verifies if the user is logged in</p>
      * @return Boolean
      */
-    public function checkLogin()
-    {
+    public function checkLogin() {
         $user_ok = false;
         $user_id = "";
         $log_usename = "";
@@ -1083,27 +932,21 @@ class user extends main
             $log_usename = preg_replace('#[^a-z0-9]#i', '', $_SESSION['username']);
             // Verify the user
             $user_ok = $this->evalLoggedUser($user_id, $log_usename);
-            if ($user_ok == true) {
-                // Update their lastlogin datetime field
-                R::exec("UPDATE credentials SET last_login = now() WHERE user_id = '$user_id' LIMIT 1");
-            }
         }
         return $user_ok;
     }
 
     /**
-     *<h1>login</h1>
-     *<p>This is the function to login the user</p>
+     * <h1>login</h1>
+     * <p>This is the function to login the user</p>
      * @param $username the username of the user
      * @param $password the password of the user
      */
-    public function login($username, $password)
-    {
+    public function login($username, $password) {
         $password = md5($password);
         try {
-            $user = R::getRow("SELECT id,username,type FROM credentials WHERE username='$username' AND password='$password'");
+            $user = R::getRow("SELECT credentials.user,user_profile.id,username,password,type FROM credentials JOIN user_profile ON credentials.user=user_profile.id WHERE username='$username' AND password='$password'");
             if (isset($user)) {
-                // CREATE THEIR SESSIONS AND COOKIES
                 $_SESSION['user_id'] = $db_id = $user['id'];
                 $_SESSION['username'] = $db_username = $user['username'];
                 $_SESSION['type'] = $db_type = $user['type'];
@@ -1112,16 +955,18 @@ class user extends main
                 setcookie("type", $db_type, time() + 60, "/", "", "", true);
                 // UPDATE THEIR "LASTLOGIN" FIELDS
                 try {
-                    R::exec("UPDATE credentials SET last_login = now() WHERE id = '$db_id' LIMIT 1");
+                    $log_time = date("Y-m-d h:m:s");
+                    R::exec("UPDATE credentials SET last_log = '$log_time' WHERE id = '$db_id'");
                 } catch (Exception $e) {
-                    error_log("ERROR: Unable to login" . $e);
+                    error_log("ERROR: Unable to update login information" . $e);
                 }
                 $this->status = $this->feedbackFormat(1, "Authentication verified");
                 //header("location:../views/home.php");
             } else {
                 $this->status = $this->feedbackFormat(0, "Authentication not verified");
             }
-        } catch (Exception $e) {
+        } catch (Exception $exc) {
+            error_log("LOGIN ERROR:" . $exc);
             $this->status = $this->feedbackFormat(0, "Login error");
         }
         die($this->status);
@@ -1130,14 +975,17 @@ class user extends main
     /**
      * Return the user type of the logged in user
      */
-    public function getUserType($user_id)
-    {
+    public function getUserType($username) {
         $userType = null;
-        if ($user_id) {
+        if ($username) {
             try {
-                $type_id = R::getCell("SELECT DISTINCT type FROM credentials WHERE user = '$user_id'");
-                if ($type_id != null) {
+                $type_id = R::getCell("SELECT DISTINCT type FROM credentials WHERE username = '$username'");
+                if ($type_id != null && $type_id > 1) {
                     $userType = R::getCell("SELECT DISTINCT title FROM role WHERE id='$type_id'");
+                } else if ($type_id == 0) {
+                    $userType = "author";
+                } else if ($type_id == 1) {
+                    $userType = "initial";
                 }
             } catch (Exception $e) {
                 error_log("USER[getUserType]:" . $e);
@@ -1150,32 +998,38 @@ class user extends main
      * This function checks if the user is allowed to do the subject.
      * @param $toDo What the user needs
      */
-    public function isUserAllowed($toDo, $subject)
-    {
+    public function isUserAllowed($toDo, $subject) {
         $isAllowed = false;
-        if (isset($_SESSION['user_id'])) {
-            $userId = $_SESSION['user_id'];
-            $userType = $this->getUserType($userId);
+        if (isset($_SESSION['username'])) {
+            $username = $_SESSION['username'];
+            $userType = $this->getUserType($username);
             if (isset($userType)) {
-                try {
-                    $userPrivilege = R::getRow("SELECT writing,reading FROM privilege WHERE subject='$subject' AND role='$userType'");
-                    if ($toDo == 'add' && $userPrivilege['writing'] == "allowed") {
-                        $isAllowed = true;
+                if ($userType === "author") {
+                    $isAllowed = true;
+                } else {
+                    try {
+                        $userPrivilege = R::getRow("SELECT writing,reading FROM privilege WHERE subject='$subject' AND role='$userType'");
+
+                        if (null !== $userPrivilege) {
+                            if ($toDo == 'add' && $userPrivilege['writing'] == "allowed") {
+                                $isAllowed = true;
+                            }
+                            if ($toDo == 'view' && $userPrivilege['reading'] == "allowed") {
+                                $isAllowed = true;
+                            }
+                        }
+                    } catch (Exception $e) {
+                        error_log("isuserAllowed:" . $e);
                     }
-                    if ($toDo == 'view' && $userPrivilege['reading'] == "allowed") {
-                        $isAllowed = true;
-                    }
-                } catch (Exception $e) {
-                    error_log("isuserAllowed:" . $e);
                 }
             }
         }
         return $isAllowed;
     }
 
-    public function listRoleInOption()
-    {
+    public function listRoleInOption() {
         try {
+            $userType = $this->getUserType($_SESSION['username']);
             $roleDetails = R::getAll("SELECT id,title FROM role");
             for ($counter = 0; $counter < count($roleDetails); $counter++) {
                 echo "<option name='add_user_type' value=" . $roleDetails[$counter]['id'] . ">" . $roleDetails[$counter]['title'] . "</option>";
@@ -1184,17 +1038,17 @@ class user extends main
             error_log("Unable to read list of roles.");
         }
     }
+
     /**
      * <h1>getUserDetails</h1>
      * <p>This method is to fetch information of the user.</p>
-     * @param Int $userId The user id
+     * @param Int $username The user id
      * @return Array Returns an array that contains all user information.
      */
-    public function getUserDetails($userId)
-    {
+    public function getUserDetails($username) {
         $user = null;
         try {
-            $user = R::getRow("SELECT u.id,u.fname,u.lname,u.address,u.oname,u.email,u.phone,c.user,c.username,c.type FROM user AS u JOIN credentials AS c WHERE u.id=c.user AND u.id='$userId'");
+            $user = R::getRow("SELECT user_profile.id,fname,lname,oname,email,phone,address,credentials.user,credentials.type,credentials.username FROM user_profile INNER JOIN credentials ON user_profile.id=credentials.user WHERE user_profile.id='$username'");
             $this->fname = $user['fname'];
             $this->lname = $user['lname'];
             $this->username = $user['username'];
@@ -1213,8 +1067,7 @@ class user extends main
  * THE SUBJECT CLASS
  * */
 
-class subject extends main
-{
+class subject extends main {
 
     public $status = "";
     public $subjectId = null;
@@ -1222,15 +1075,15 @@ class subject extends main
     public $attributes = [];
 
     //adding a new content
-    public function add($subjTitle, $subjAttrNumber, $subjAttributes, $subjCommenting, $subjLikes, $subjDisplayViews)
-    {
+    public function add($subjTitle, $type, $subjAttrNumber, $subjAttributes, $subjCommenting, $subjLikes, $subjDisplayViews) {
 
         if ($this->isValid($subjTitle) && $subjTitle != 'subject') {
             try {
                 $subject = R::dispense("subject");
                 $subject->title = $subjTitle;
+                $subject->type = $type;
                 $subject->createdOn = date("d-m-Y h:m:s");
-                $subject->createdBy = $_SESSION['user_id'];
+                $subject->createdBy = $_SESSION['username'];
                 $subject->lastUpdate = date("d-m-Y h:m:s");
                 $subject->attrNumber = $subjAttrNumber;
                 $subject->enable_commenting = $subjCommenting;
@@ -1246,6 +1099,7 @@ class subject extends main
                         R::exec("DELETE FROM subject WHERE id='$subjectId'");
                     } catch (Exception $e) {
                         $this->status = $this->feedbackFormat(0, "ERROR: undefined");
+                        error_log("UNABLE TO CREATE CONTENT" . $e);
                     }
                     $this->status = $this->feedbackFormat(0, "ERROR: article could not be created.");
                 } else {
@@ -1253,6 +1107,7 @@ class subject extends main
                 }
             } catch (Exception $e) {
                 $this->status = $this->feedbackFormat(0, "ERROR: subject not added");
+                error_log("UNABLE TO CREATE CONTENT" . $e);
             }
         } else {
             $this->status = $this->feedbackFormat(0, "ERROR: Title already exists");
@@ -1262,8 +1117,7 @@ class subject extends main
     /**
      * Adding the subject attributes.
      */
-    private function createAttributes($attributes)
-    {
+    private function createAttributes($attributes) {
         $isCreated = false;
         if (isset($this->subjectId)) {
             try {
@@ -1272,9 +1126,12 @@ class subject extends main
                     $attribute->subject = $this->subjectId;
                     $attribute->name = $attributes[$counter]["name"];
                     $attribute->data_type = $attributes[$counter]["type"];
+                    $attribute->is_null = $attributes[$counter]["is_null"];
+                    $attribute->is_unique = $attributes[$counter]["is_unique"];
                     $attribute->has_ref = $hasRef = $attributes[$counter]["has_ref"];
                     $attributeId = R::store($attribute);
-                    if ((isset($attributeId) && $hasRef == false) || (isset($attributeId) && $hasRef == true && $this->createReference($attributeId, $attributes[$counter]["reference"]))) {
+                    $savedAttribute = R::getRow("SELECT * FROM attribute WHERE id='$attributeId'");
+                    if ((null !== $savedAttribute && $hasRef == false) || (null !== $savedAttribute && $hasRef == true && $this->createReference($attributeId, $attributes[$counter]["reference"]))) {
                         $isCreated = true;
                     }
                 }
@@ -1291,8 +1148,7 @@ class subject extends main
      * @param Integer $attributeId The ID of the attribute creating the reference
      * @param String $referenceName The name of reference
      */
-    public function createReference($attributeId, $referenceName)
-    {
+    public function createReference($attributeId, $referenceName) {
         $isCreated = false;
         if (isset($attributeId)) {
             try {
@@ -1315,8 +1171,7 @@ class subject extends main
      * <p>This method is to read the references of the specified attributes</p>
      * @param Integer $attrId The id of the attribute.
      */
-    public function readReference($attrId)
-    {
+    public function readReference($attrId) {
         $reference = null;
         if (isset($attrId)) {
             try {
@@ -1329,8 +1184,7 @@ class subject extends main
     }
 
     //checking the existence of a subject
-    public function getId($title)
-    {
+    public function getId($title) {
         $id = null;
         try {
             $id = R::getCell("SELECT id FROM subject WHERE title='$title'");
@@ -1342,8 +1196,7 @@ class subject extends main
     }
 
     //checking the existence of a subject
-    public function isValid($title)
-    {
+    public function isValid($title) {
         $status = true;
         try {
             $check = R::getCol("SELECT id FROM subject WHERE title='$title'");
@@ -1360,15 +1213,20 @@ class subject extends main
     /**
      * returns the attributes of a given subject
      */
-    public function getAttributes($subject)
-    {
+    public function getAttributes($subject) {
         $response = array();
         try {
-            $attributeList = R::getAll("SELECT id,name,data_type FROM attribute WHERE subject='$subject'");
+            $attributeList = R::getAll("SELECT id,name,data_type,is_null,is_unique FROM attribute WHERE subject='$subject'");
             for ($counter = 0; $counter < count($attributeList); $counter++) {
                 $attrName = str_replace(" ", "_", $attributeList[$counter]["name"]);
                 $attrType = $attributeList[$counter]["data_type"];
-                $response[$counter] = array("id" => $attributeList[$counter]["id"], "name" => $attrName, "type" => $attrType);
+                $attrIsNull = $attributeList[$counter]["is_null"];
+                $attrIsUnique = $attributeList[$counter]["is_unique"];
+                $response[$counter] = array("id" => $attributeList[$counter]["id"],
+                    "name" => $attrName,
+                    "type" => $attrType,
+                    "is_null" => $attrIsNull,
+                    "is_unique" => $attrIsUnique);
             }
         } catch (Exception $e) {
             error_log("ERROR (getAttributes): " . $e);
@@ -1377,19 +1235,18 @@ class subject extends main
     }
 
     //GET LIST OF REGISTERED SUBJECTS
-    public function getList()
-    {
+    public function getList() {
         $header = array("Title", "Created by", "Created on", "Last update");
         $tablecontent = null;
         try {
-            $subjectList = R::getAll("SELECT title,created_by,created_on,last_update FROM subject ORDER BY created_on DESC ");
+            $subjectList = R::getAll("SELECT id,title,created_by,created_on,last_update FROM subject ORDER BY created_on DESC ");
             for ($count = 0; $count < count($subjectList); $count++) {
                 $title = $subjectList[$count]['title'];
-                //TODO: Get the creator name
                 $createdBy = $subjectList[$count]['created_by'];
                 $createdOn = $subjectList[$count]['created_on'];
                 $lastUpdate = $subjectList[$count]['last_update'];
-                $tablecontent[$count] = array(1 => $title, 2 => $createdBy, 3 => $createdOn, 4 => $lastUpdate);
+                $tableActionTag = "subject-" . $subjectList[$count]['id'];
+                $tablecontent[$count] = array(0 => $tableActionTag, 1 => $title, 2 => $createdBy, 3 => $createdOn, 4 => $lastUpdate);
             }
             $this->displayTable($header, $tablecontent, null);
         } catch (Exception $e) {
@@ -1400,25 +1257,38 @@ class subject extends main
     /**
      * delete
      * This method deleted the subject specified
+     * @param String The title of the subject.
      */
-    public function delete($subjectId)
-    {
+    public function delete($subjectId) {
+        $isDeleted = false;
         if (isset($subjectId)) {
             try {
                 $subjectTitle = R::getCell("SELECT title FROM subject WHERE id='$subjectId'");
                 if (isset($subjectTitle)) {
-                    $tableDropped = R::exec("DROP TABLE $subjectTitle");
-                }
-
-                if ($tableDropped) {
-                    R::exec("DELETE FROM subject WHERE id='$subjectId'");
-                }
-
-                $subjectId = $this->getId($subjectTitle);
-                if (!isset($subjectId)) {
-                    $this->status = $this->feedbackFormat(1, "Subject deleted successfully");
-                } else {
-                    $this->status = $this->feedbackFormat(0, "Unable to delete subject");
+                    R::exec("DROP TABLE $subjectTitle");
+                    if ($this->isTableExisting($subjectTitle) === false) {
+                        $attributeList = R::getAll("SELECT id,name,has_ref FROM attribute WHERE subject='$subjectId'");
+                        for ($counter = 0; null !== $attributeList && $counter < count($attributeList); $counter++) {
+                            $attributeId = $attributeList[$counter]['id'];
+                            if ($attributeList[$counter]['has_ref'] == true) {
+                                R::exec("DELETE FROM reference WHERE attribute='$attributeId'");
+                                R::exec("DELETE FROM attribute WHERE id='$attributeId'");
+                            } else {
+                                R::exec("DELETE FROM attribute WHERE id='$attributeId'");
+                            }
+                        }
+                        R::exec("DELETE FROM subject WHERE id='$subjectId'");
+                        $subjectId = $this->getId($subjectTitle);
+                        if (!isset($subjectId)) {
+                            $isDeleted = true;
+                            $this->status = $this->feedbackFormat(1, "Subject deleted successfully");
+                        } else {
+                            $this->status = $this->feedbackFormat(0, "Unable to delete subject");
+                        }
+                    } else {
+                        error_log("Unable to drop table $subjectTitle");
+                        $this->status = $this->feedbackFormat(0, "Unable to delete the subject (the table can't be dropped)");
+                    }
                 }
             } catch (Exception $e) {
                 error_log("SUBJECT:DELETE" . $e);
@@ -1426,8 +1296,43 @@ class subject extends main
             }
         } else {
             $this->status = $this->feedbackFormat(0, "Subject not specified");
+            error_log("Unable to read the ID of the subject title specified.");
         }
         die($this->status);
+        return $isDeleted;
+    }
+
+    public function loadContainerCombo() {
+        try {
+            $parentCombo = R::getCol("SELECT title FROM subject WHERE type='container'");
+            for ($counter = 0; null !== $parentCombo && $counter < count($parentCombo); $counter++) {
+                echo "<option value='$parentCombo[$counter]'>$parentCombo[$counter]</option>";
+            }
+        } catch (Exception $exc) {
+            error_log("ERROR:loadParentCombo" . $exc);
+        }
+    }
+
+    public function getSubjectType($articleId) {
+        $type = null;
+        if (isset($articleId)) {
+            try {
+                $type = R::getCell("SELECT type FROM subject WHERE id='$articleId'");
+            } catch (Exception $exc) {
+                error_log("ERROR:getSubjectType" . $exc);
+            }
+        }
+        return $type;
+    }
+
+    public function getChildSubjectList($parentName) {
+        $childList = null;
+        try {
+            $childList = R::getAll("SELECT id,title FROM subject WHERE type='$parentName'");
+        } catch (Exception $exc) {
+            error_log("ERROR:getChildSubjectList:" . $exc);
+        }
+        return $childList;
     }
 
 }
@@ -1435,14 +1340,12 @@ class subject extends main
 /**
  * THE CONTENT CLASS
  */
-class content extends main
-{
+class content extends main {
 
     public $status = "";
 
     //register a new article
-    public function register($subjectTitle, $attributes)
-    {
+    public function register($subjectTitle, $attributes) {
         $status = false;
         try {
             $subjectTitle = str_replace(" ", "_", $subjectTitle);
@@ -1475,9 +1378,9 @@ class content extends main
     }
 
     //adding a new article content
-    public function add($content, $values, $attributes)
-    {
+    public function add($content, $values, $attributes) {
         try {
+            $content = str_replace(" ", "_", $content);
             $article = R::xdispense($content);
             for ($counter = 0; $counter < count($attributes); $counter++) {
                 $attribute = str_replace(" ", "_", $attributes[$counter]['name']);
@@ -1485,7 +1388,8 @@ class content extends main
                 $article->$attribute = $value;
             }
             $articleId = R::store($article);
-            if (isset($articleId)) {
+            $savedArticle = R::getRow("SELECT * FROM $content WHERE id='$articleId'");
+            if (null !== $savedArticle) {
                 $response = $this->feedbackFormat(1, "Saved succefully");
             } else {
                 $response = $this->feedbackFormat(0, "Unknown error!");
@@ -1502,8 +1406,7 @@ class content extends main
      * <p>This function is to return the list of articles in table view.</p>
      * @param Integer $subjectId The ID of the subject in consideration.
      */
-    public function getList($subjectId)
-    {
+    public function getList($subjectId) {
         /*
          * initializing the function
          */
@@ -1526,16 +1429,82 @@ class content extends main
         }
     }
 
-    //editting an article
-    public function edit()
-    {
+    /**
+     * delete
+     * This function deletes the specified instance in the table
+     * @param $content the name of the table holding the value to be deleted
+     * @param $instanceId The id of the value to be deleted
+     */
+    public function delete($content, $instanceId) {
+        $isDeleted = false;
+        if (isset($content) && isset($instanceId)) {
+            try {
+                R::exec("DELETE FROM $content WHERE id='$instanceId'");
+                //verify if deleted
+                $deletedId = R::getCell("SELECT id FROM $content WHERE id='$instanceId'");
+                if (isset($deletedId)) {
+                    error_log("ERROR(delete): Failed to delete instance($instanceId) from $content");
+                    $this->status = $this->feedbackFormat(0, "Failed to delete the subject");
+                } else {
+                    $isDeleted = true;
+                    $this->status = $this->feedbackFormat(1, "Successfully deleted!");
+                }
+            } catch (Exception $exc) {
+                error_log("ERROR(delete)" . $exc);
+                $this->status = $this->feedbackFormat(0, "Error occured deleting the content");
+            }
+        } else {
+            error_log("ERROR(delete):Missing input");
+            $this->status = $this->feedbackFormat(0, "Missing inputs");
+        }
+        die($this->status);
+        return $isDeleted;
+    }
 
+    /**
+     * update
+     * This function is to update the content of a given table
+     * @param $instanceId the ID of the occurence to be update
+     * @param $content the table to be updated
+     * @param $values the values to modify
+     * @param $attributes columns to be updated
+     */
+    public function update($instanceId, $content, $values, $attributes) {
+        $response = null;
+        if (isset($instanceId) && isset($content) && isset($values) && isset($attributes)) {
+            try {
+                $updateTime = date("d-m-Y h:m:s");
+                //keep last update time records
+                $content = str_replace(" ", "_", $content);
+                R::exec("UPDATE subject SET last_update='$updateTime' WHERE title='$content' ");
+                $sqlUpdateString = "";
+                for ($counter = 0; $counter < count($attributes); $counter++) {
+                    $attribute = str_replace(" ", "_", $attributes[$counter]['name']);
+                    $value = $values[$counter];
+                    if (isset($value)) {
+                        if ($counter == 0) {
+                            $sqlUpdateString = $attribute . "='" . $value . "'";
+                        } else {
+                            $sqlUpdateString = $sqlUpdateString . "," . $attribute . "='" . $value . "'";
+                        }
+                    }
+                }
+                R::exec("UPDATE $content SET $sqlUpdateString WHERE id='$instanceId'");
+                $response = $this->feedbackFormat(1, "Updated successfully");
+            } catch (Exception $exc) {
+                error_log("ERROR(update): " . $exc);
+                $response = $this->feedbackFormat(0, "Error occured updating " . str_replace("_", " ", $content));
+            }
+        } else {
+            error_log("ERROR(update):Missing inputs");
+            $response = $this->feedbackFormat(0, "Missing inputs");
+        }
+        return $response;
     }
 
     //adding a comment
-    public function comment()
-    {
-
+    public function comment() {
+        
     }
 
 }
@@ -1545,8 +1514,7 @@ class content extends main
  * <p>This is the class to handle the communication through the system</p>
  *
  */
-class message extends main
-{
+class message extends main {
 
     public $count = 0;
     public $head = "No new message.";
@@ -1559,8 +1527,7 @@ class message extends main
     public $receiver;
     public $createdOn;
 
-    public function __construct()
-    {
+    public function __construct() {
         $user = new user();
         $this->notRead = [];
         $this->sent = [];
@@ -1575,9 +1542,7 @@ class message extends main
      * <h1>send</h1>
      * <p>This is the method to send messages through the system</p>
      */
-    public function send($sender, $email, $message)
-    {
-        $user = new user();
+    public function send($sender, $email, $message) {
         $fullname = explode(" ", $sender);
         if (isset($fullname[0]) && isset($fullname[1])) {
             $fname = $fullname[0];
@@ -1600,22 +1565,19 @@ class message extends main
         /*
          * Create user before sending message
          */
-        //$user->add($fname, $lname, $oname, $email, $tel, $address, $username, $password, $type, $age, $gender);
-        $user_id = $user->add($fname, $lname, null, $email, null, null, $email, $lname, 4, $age);
         try {
             $messageQR = R::dispense("message");
-            $messageQR->user = $user_id;
             $messageQR->sender = $sender;
             $messageQR->email = $email;
             $messageQR->message = $message;
-            $messageQR->receiver = 0;
+            $messageQR->receiver = getenv("ADDAX_AUTHOR");
             $messageQR->created_on = date("Y-m-d h:m:s");
             $messageQR->status = 0;
             R::store($messageQR);
             $this->status = $this->feedbackFormat(1, "Message sent successfully!");
         } catch (Exception $e) {
             $this->status = $this->feedbackFormat(0, "Unable to post message!");
-            error_log("ERROR(web:postContactMessage)"+$e);
+            error_log("ERROR(web:postContactMessage)" + $e);
         }
         die($this->status);
     }
@@ -1624,14 +1586,12 @@ class message extends main
      * <h1>count</h1>
      * <p>This is the method count message.</p>
      */
-    public function count()
-    {
+    public function count() {
         $userObj = new user();
-        $userId = $_SESSION['user_id'];
-        $userType = $userObj->getUserType($userId);
+        $username = $_SESSION['username'];
         $message = ["sent" => 0, "received" => 0, "not read" => 0];
         try {
-            $notRead = R::getAll("SELECT id,sender,message,created_on FROM message WHERE receiver='$userType' AND status='0'");
+            $notRead = R::getAll("SELECT id,sender,message,created_on FROM message WHERE receiver='$username' AND status='0'");
             $this->count = count($notRead);
             if ($this->count > 0) {
                 $this->head = "You have " . $this->count . " messages";
@@ -1646,8 +1606,7 @@ class message extends main
      * <h1>receive</h1>
      * <p>This is the method to display received messages</p>
      */
-    public function receive()
-    {
+    public function receive() {
         $received = $this->received;
         if (count($received) > 0) {
             $this->displayMessageTable(null, $received, "read");
@@ -1660,8 +1619,7 @@ class message extends main
      * <h1>read</h1>
      * <p>This function is to read the content of the message</p>
      */
-    public function read($messageId)
-    {
+    public function read($messageId) {
 
         $received = $this->received;
         for ($count = 0; $count < count($received); $count++) {
@@ -1682,8 +1640,7 @@ class message extends main
         }
     }
 
-    private function alertDisplayFormat($messageDetails)
-    {
+    private function alertDisplayFormat($messageDetails) {
         echo '<li>
                     <a href="' . $messageDetails['link'] . '">
                         <div class="msg-img"><div class="online off"></div><img class="img-circle" src="../images/noimage-team.png" alt=""></div>
@@ -1694,14 +1651,12 @@ class message extends main
                 </li>';
     }
 
-    private function fetch()
-    {
+    private function fetch() {
         $userObj = new user();
-        $userId = $_SESSION['user_id'];
-        $userType = $userObj->getUserType($userId);
+        $username = $_SESSION['username'];
+        $userType = $userObj->getUserType($username);
         try {
-            //$notRead = R::getAll("SELECT id,sender,message,created_on FROM message WHERE receiver='$userType' AND status='0'");
-            $notRead = R::getAll("SELECT id,sender,message,created_on,status FROM message WHERE receiver='$userId' OR receiver='$userType' AND status='0'");
+            $notRead = R::getAll("SELECT id,sender,message,created_on,status FROM message WHERE receiver='$username' AND status='0'");
             if (count($notRead) > 0) {
                 for ($countNR = 0; $countNR < count($notRead); $countNR++) {
                     $details[$countNR] = [
@@ -1715,7 +1670,7 @@ class message extends main
                 }
                 $this->notRead = $details;
             }
-            $received = R::getAll("SELECT id,sender,message,created_on,status FROM message WHERE receiver='$userType' OR receiver='$userId' ");
+            $received = R::getAll("SELECT id,sender,message,created_on,status FROM message WHERE receiver='$userType' OR receiver='$username' ");
             if (count($received) > 0) {
                 for ($count = 0; $count < count($received); $count++) {
                     if ($received[$count]['status'] == 0) {
@@ -1739,8 +1694,7 @@ class message extends main
         }
     }
 
-    public function alert()
-    {
+    public function alert() {
         try {
             $notRead = $this->notRead;
             for ($count = 0; $count < count($notRead); $count++) {
@@ -1760,14 +1714,37 @@ class message extends main
         }
     }
 
+    /**
+     * <h1>send</h1>
+     * <p>This is the method to send an email </p>
+     */
+    public function sendEmail($reciever) {
+        $isSent = false;
+        $mail = new PHPMailer\PHPMailer\PHPMailer();
+        $mail->From = "davejuelz@gmail.com";
+        $mail->FromName = "David NIWEWE";
+        $mail->addAddress($reciever);
+        $mail->addReplyTo("davejuelz@gmail.com", "Reply");
+        $mail->isHTML(true);
+        $mail->Subject = "Addax verify email";
+        $mail->Body = "Your email has been verified login <a href='https://addax.herokuapp.com/dashboard'>here</a>";
+        try {
+            $isSent = $mail->Send();
+            if ($isSent != true) {
+                error_log("ERROR: unable to send email." . $mail->ErrorInfo);
+            }
+        } catch (Exception $exc) {
+            error_log("ERROR(sendEmail)" . $exc);
+        }
+    }
+
 }
 
 /**
  * <h1>notification</h1>
  * <p>This class is to handle notification</p>
  */
-class notification extends main
-{
+class notification extends main {
 
     /**
      * To count the number of notifications
@@ -1780,8 +1757,7 @@ class notification extends main
     public $content;
     public $createdOn;
 
-    public function __construct()
-    {
+    public function __construct() {
         $user = new user();
         if ($user->checkLogin()) {
             $this->count();
@@ -1793,8 +1769,7 @@ class notification extends main
      * <h1>alertDisplayFormat</h1>
      * <p>This method is the build the format of an alert</p>
      */
-    private function alertDisplayFormat($notificationDetails)
-    {
+    private function alertDisplayFormat($notificationDetails) {
         echo ' <li>
                     <a href="' . $notificationDetails['link'] . '">
                         <div class="task-icon badge badge-success"><i class="icon-pin"></i></div>
@@ -1804,35 +1779,36 @@ class notification extends main
                 </li>';
     }
 
-    public function alert()
-    {
+    public function alert() {
         $userObj = new user();
-        $userId = $_SESSION['user_id'];
-        $userType = $userObj->getUserType($userId);
-        try {
-            $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$userId' LIMIT 1");
-            $notificationUL = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='1' AND dedicated='$userTypeCode' ORDER BY created_on DESC");
-            for ($countUL = 0; $countUL < count($notificationUL); $countUL++) {
-                $link = "read.php?action=read&content=notification&ref=" . $notificationUL[$countUL]['id'];
-                $details = [
-                    "description" => $notificationUL[$countUL]['description'],
-                    "link" => $link,
-                    "time" => "",
-                ];
-                $this->alertDisplayFormat($details);
+        if (isset($_SESSION['username'])) {
+            $username = $_SESSION['username'];
+            $userType = $userObj->getUserType($username);
+            try {
+                $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$username' LIMIT 1");
+                $notificationUL = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='1' AND dedicated='$userTypeCode' ORDER BY created_on DESC");
+                for ($countUL = 0; $countUL < count($notificationUL); $countUL++) {
+                    $link = "read.php?action=read&content=notification&ref=" . $notificationUL[$countUL]['id'];
+                    $details = [
+                        "description" => $notificationUL[$countUL]['description'],
+                        "link" => $link,
+                        "time" => "",
+                    ];
+                    $this->alertDisplayFormat($details);
+                }
+                $notificationPNP = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='2' AND dedicated='$username' ORDER BY created_on DESC");
+                for ($countPNP = 0; $countPNP < count($notificationPNP); $countPNP++) {
+                    $link = "read.php?action=read&content=notification&ref=" . $notificationPNP[$countPNP]['id'];
+                    $details = [
+                        "description" => $notificationPNP[$countPNP]['description'],
+                        "link" => $link,
+                        "time" => "",
+                    ];
+                    $this->alertDisplayFormat($details);
+                }
+            } catch (Exception $e) {
+                error_log("NOTIFICATION(alert):" . $e);
             }
-            $notificationPNP = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='2' AND dedicated='$userId' ORDER BY created_on DESC");
-            for ($countPNP = 0; $countPNP < count($notificationPNP); $countPNP++) {
-                $link = "read.php?action=read&content=notification&ref=" . $notificationPNP[$countPNP]['id'];
-                $details = [
-                    "description" => $notificationPNP[$countPNP]['description'],
-                    "link" => $link,
-                    "time" => "",
-                ];
-                $this->alertDisplayFormat($details);
-            }
-        } catch (Exception $e) {
-            error_log("NOTIFICATION(alert):" . $e);
         }
     }
 
@@ -1841,8 +1817,7 @@ class notification extends main
      * <p>This method is to notify about recent activity</p>
      * @param
      */
-    public function add($notificationDetails)
-    {
+    public function add($notificationDetails) {
         if (isset($notificationDetails) && count($notificationDetails) > 0) {
             //get all values
             $notification = R::dispense("notification");
@@ -1865,16 +1840,15 @@ class notification extends main
      * <h1>count</h1>
      * <p>This method is to count the number of notification</p>
      */
-    public function count()
-    {
+    public function count() {
         $userObj = new user();
-        $userId = $_SESSION['user_id'];
-        $userType = $userObj->getUserType($userId);
+        $username = $_SESSION['username'];
+        $userType = $userObj->getUserType($username);
         try {
             /*
              * Getting the user type
              */
-            $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$userId' LIMIT 1");
+            $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$username' LIMIT 1");
             /*
              * Counting notifications dedicated to user types
              */
@@ -1882,7 +1856,7 @@ class notification extends main
             /*
              * Counting notification dedicated to the logged in user
              */
-            $notificationPNP = R::getAll("SELECT DISTINCT id FROM notification WHERE privacy='2' AND dedicated='$userId' AND status='0'");
+            $notificationPNP = R::getAll("SELECT DISTINCT id FROM notification WHERE privacy='2' AND dedicated='$username' AND status='0'");
             $this->count = count($notificationUL) + count($notificationPNP);
             if ($this->count > 0) {
                 $this->head = "You have " . $this->count . " notifications!";
@@ -1892,14 +1866,13 @@ class notification extends main
         }
     }
 
-    public function fetch()
-    {
+    public function fetch() {
         $userObj = new user();
-        $userId = $_SESSION['user_id'];
-        $userType = $userObj->getUserType($userId);
+        $username = $_SESSION['username'];
+        $userType = $userObj->getUserType($username);
         $details = [];
         try {
-            $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$userId' LIMIT 1");
+            $userTypeCode = R::getCell("SELECT DISTINCT type FROM credentials WHERE user='$username' LIMIT 1");
             $notificationUL = R::getAll("SELECT id,title,description,created_on,status FROM notification WHERE privacy='1' AND dedicated='$userTypeCode' ORDER BY created_on DESC");
             for ($countUL = 0; $countUL < count($notificationUL); $countUL++) {
                 if ($notificationUL[$countUL]['status'] == 0) {
@@ -1917,7 +1890,7 @@ class notification extends main
                 ];
             }
             $this->checked = $details;
-            $notificationPNP = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='2' AND dedicated='$userId' ORDER BY created_on DESC");
+            $notificationPNP = R::getAll("SELECT id,title,description,created_on FROM notification WHERE privacy='2' AND dedicated='$username' ORDER BY created_on DESC");
             for ($countPNP = 0; $countPNP < count($notificationPNP); $countPNP++) {
                 if ($notificationPNP[$countPNP]['status'] == 0) {
                     $status = "unread";
@@ -1943,8 +1916,7 @@ class notification extends main
      * <h1>read</h1>
      * <p>This function is to read the content of the notification</p>
      */
-    public function read($messageId)
-    {
+    public function read($messageId) {
         $notified = $this->notified;
         for ($count = 0; $count < count($notified); $count++) {
             if ($messageId == $notified[$count]['id']) {
@@ -1968,8 +1940,7 @@ class notification extends main
      * <h1>receive</h1>
      * <p>This is the method to display received notifications</p>
      */
-    public function receive()
-    {
+    public function receive() {
         $notified = $this->notified;
         if (count($notified) > 0) {
             $this->displayMessageTable(null, $notified, null);
@@ -1981,14 +1952,12 @@ class notification extends main
 }
 
 //the  sms class
-class sms extends main
-{
+class sms extends main {
 
     public $status = "";
 
     //sending the sms
-    public function send($recipient, $subject, $message)
-    {
+    public function send($recipient, $subject, $message) {
         $recipients = array();
         $file = null;
         $sent = 0;
@@ -2045,8 +2014,7 @@ class sms extends main
     }
 
     //sending message with the http API
-    private function serviceCaller($message, $phone, $sender)
-    {
+    private function serviceCaller($message, $phone, $sender) {
         $status = false;
         $send = new Sender("client.rmlconnect.net", "8080", "paradigm", "2hLn4PXn", $sender, $message, $phone, 0, 1);
         $response = $send->Submit();
@@ -2063,8 +2031,7 @@ class sms extends main
         return $status;
     }
 
-    public function history($user, $caller)
-    {
+    public function history($user, $caller) {
         $response = array();
         $response['response'] = array();
         try {
@@ -2108,8 +2075,7 @@ class sms extends main
     }
 
     //THE COUNTER FUNCTION
-    public function counter($criteria, $user)
-    {
+    public function counter($criteria, $user) {
         $number = 0;
         try {
             if ($criteria == "sent" && !isset($user)) {
@@ -2132,11 +2098,10 @@ class sms extends main
     }
 
     /*
-    CHECK IF STOCK EXISTS
+      CHECK IF STOCK EXISTS
      *      */
 
-    public function stockBalance($user)
-    {
+    public function stockBalance($user) {
         $response = array();
         try {
             $quantity = R::getCell("SELECT quantity FROM stock WHERE client='$user'");
@@ -2154,8 +2119,7 @@ class sms extends main
  * <h1>dashboard</h1>
  * <p>This class is to handle the dashboard of the application.</p>
  */
-class dashboard
-{
+class dashboard {
 
     /**
      * Setting the values in the dashboard
@@ -2163,8 +2127,7 @@ class dashboard
     public $title = [];
     public $number = [];
 
-    public function __construct()
-    {
+    public function __construct() {
         $this->populate();
     }
 
@@ -2172,14 +2135,13 @@ class dashboard
      * <h1>populate</h1>
      * <p>Populating the values to be displayed in the dashboard</p>
      */
-    public function populate()
-    {
+    public function populate() {
         $userObj = new user();
         $messageObj = new message();
         $notificationObj = new notification();
         $userObj = new user();
-        if (isset($_SESSION['user_id'])) {
-            $userType = $userObj->getUserType($_SESSION['user_id']);
+        if (isset($_SESSION['username'])) {
+            $userType = $userObj->getUserType($_SESSION['username']);
             if ($userType == "administrator") {
                 $titleList = ["Users", "Notifications", "Messages", "Log"];
                 $countList = [$userObj->count, $notificationObj->count, $messageObj->count, "-"];
@@ -2190,13 +2152,11 @@ class dashboard
             $this->number = $countList;
             $this->title = $titleList;
         }
-
     }
 
 }
 
-class web extends main
-{
+class web extends main {
 
     public $status = "";
 
@@ -2204,8 +2164,7 @@ class web extends main
      * <h1>showContent</h1>
      * <p>This method is to show the specified content of the web.</p>
      */
-    public function showContent($title, $formatType, $attributes)
-    {
+    public function showContent($title, $formatType, $attributes) {
         $subject = new subject();
         $format = new sectionFormat();
         if (isset($title) && isset($formatType) && isset($attributes)) {
@@ -2214,7 +2173,7 @@ class web extends main
                 $attributList[$count] = ["name" => $attributes[$count]];
             }
             $contentList = $this->fetchBuilder($title, $attributList);
-            for ($outer = 0; $outer < count($contentList); $outer++) {
+            for ($outer = 0; null !== $contentList && $outer < count($contentList); $outer++) {
                 $contentItem = $contentList[$outer];
                 switch ($formatType) {
                     case 1: //slide
@@ -2240,8 +2199,7 @@ class web extends main
 
 }
 
-class Sender
-{
+class Sender {
 
     public $host;
     public $port;
@@ -2284,8 +2242,7 @@ class Sender
      */
     public $strDlr;
 
-    private function sms__unicode($message)
-    {
+    private function sms__unicode($message) {
         $hex1 = '';
         if (function_exists('iconv')) {
             $latin = @iconv('UTF-8', 'ISO-8859-1', $message);
@@ -2317,8 +2274,7 @@ class Sender
     }
 
 //Constructor..
-    public function __construct($host, $port, $username, $password, $sender, $message, $mobile, $msgtype, $dlr)
-    {
+    public function __construct($host, $port, $username, $password, $sender, $message, $mobile, $msgtype, $dlr) {
         $this->host = $host;
         $this->port = $port;
         $this->strUserName = $username;
@@ -2330,15 +2286,14 @@ class Sender
         $this->strDlr = $dlr;
     }
 
-    private function send_hex()
-    {
+    private function send_hex() {
         $this->strMessage = $this->sms__unicode(
-            $this->strMessage);
+                $this->strMessage);
         try {
             //Smpp http Url to send sms.
             $live_url = "http://" . $this->host . ":" . $this->port . "/bulksms/bulksms?username=" . $this->strUserName .
-            "&password=" . $this->strPassword . "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" .
-            $this->strMobile . "&source=" . $this->strSender . "&message=" . $this->strMessage . "";
+                    "&password=" . $this->strPassword . "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" .
+                    $this->strMobile . "&source=" . $this->strSender . "&message=" . $this->strMessage . "";
             $parse_url = file($live_url);
             echo $parse_url[0];
         } catch (Exception $e) {
@@ -2347,15 +2302,14 @@ class Sender
     }
 
     //send sms with curl
-    private function send_sms_curl()
-    {
+    private function send_sms_curl() {
         $response = "";
         //Smpp http Url to send sms.
         $url = "http://" . $this->host . ":" .
-        $this->port . "/bulksms/bulksms?username=" . $this->strUserName . "&password=" . $this->strPassword .
-        "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" . $this->strMobile .
-        "&source=" . $this->strSender .
-        "&message=" . $this->strMessage . "";
+                $this->port . "/bulksms/bulksms?username=" . $this->strUserName . "&password=" . $this->strPassword .
+                "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" . $this->strMobile .
+                "&source=" . $this->strSender .
+                "&message=" . $this->strMessage . "";
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
@@ -2374,16 +2328,15 @@ class Sender
     }
 
     //Sending the sms plain
-    private function send_sms()
-    {
+    private function send_sms() {
         $this->strMessage = urlencode($this->strMessage);
         try {
 //Smpp http Url to send sms.
             $live_url = "http://" . $this->host . ":" .
-            $this->port . "/bulksms/bulksms?username=" . $this->strUserName . "&password=" . $this->strPassword .
-            "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" . $this->strMobile .
-            "&source=" . $this->strSender .
-            "&message=" . $this->strMessage . "";
+                    $this->port . "/bulksms/bulksms?username=" . $this->strUserName . "&password=" . $this->strPassword .
+                    "&type=" . $this->strMessageType . "&dlr=" . $this->strDlr . "&destination=" . $this->strMobile .
+                    "&source=" . $this->strSender .
+                    "&message=" . $this->strMessage . "";
             $parse_url = file($live_url);
             $response = $parse_url[0];
         } catch (Exception $e) {
@@ -2392,11 +2345,10 @@ class Sender
         return $response;
     }
 
-    public function Submit()
-    {
+    public function Submit() {
         $response = "";
         if ($this->strMessageType == "2" ||
-            $this->strMessageType == "6") {
+                $this->strMessageType == "6") {
             //Call The Function Of String To HEX.
             $response = $this->send_hex();
         } else {
@@ -2406,11 +2358,12 @@ class Sender
     }
 
 }
+
 /*
  * Handling all upload process
  */
-class file_handler extends main
-{
+
+class file_handler extends main {
 
     public $status = "";
     public $fileId = "";
@@ -2422,15 +2375,14 @@ class file_handler extends main
      * @param $file the name of the image to be uploaded
      * @param $category The category in which the image can be described in
      */
-    public function upload($file)
-    {
+    public function upload($file) {
+        $isUploaded = false;
         //GETTING THE PARAMETERS TO READ
         //PHONE => DEFINE COLUMN TO READ
         $db_file_name = basename($file['name']);
         $ext = explode(".", $db_file_name);
         $fileExt = end($ext);
         if ($fileExt == "jpeg" || $fileExt == "png" || $fileExt == "jpg") {
-
             $upload_errors = array(
                 // http://www.php.net/manual/en/features.file-upload.errors.php
 
@@ -2446,8 +2398,10 @@ class file_handler extends main
 
             if (!$file || empty($file) || !is_array($file)) {
                 $this->status = $this->feedbackFormat(1, "No file was attached");
+                error_log("ERROR(upload):No file was attached");
             } else if ($file["error"] != 0) {
                 $this->status = $this->feedbackFormat(0, $upload_errors[$file["error"]]);
+                error_log("ERROR(upload)" . $upload_errors[$file["error"]]);
             } else if ($file["error"] == 0) {
                 $size = $file['size'];
                 $type = $file['type'];
@@ -2470,6 +2424,10 @@ class file_handler extends main
                         $fileDetails->added_by = $_SESSION['user_id'];
                         $fileDetails->status = false;
                         $fileId = R::store($fileDetails);
+                        if (isset($fileId)) {
+                            error_log("file id" . $fileId);
+                            $isUploaded = true;
+                        }
                         $this->filePath = "../images/uploaded/" . $taget_file;
                         $this->status = json_encode(array('id' => $fileId, 'type' => 'success', 'text' => "Upload successful", 'path' => $path));
                     } catch (Exception $e) {
@@ -2478,12 +2436,66 @@ class file_handler extends main
                     }
                 } else {
                     $this->status = $this->feedbackFormat(0, "Failed to add file");
+                    error_log("ERROR(upload):Failed to add file");
                 }
             }
         } else {
             $this->status = $this->feedbackFormat(0, "The File is not an image.");
+            error_log("ERROR(upload):The File is not an image.");
         }
-        return $this->status;
+        return $isUploaded;
+    }
+
+}
+
+class validation extends main {
+
+    /**
+     * Checking the uniqueness of the value to be entered.
+     */
+    public function isUnique($tableName, $columnName, $value) {
+        $isUnique = true;
+        try {
+            $tableList = $this->getTables(false);
+            if (null !== $tableList) {
+                for ($counter = 0; $counter < count($tableList); $counter++) {
+                    if ($tableList[$counter]['table_name'] == $tableName) {
+                        $colValue = R::getCell("SELECT DISTINCT $columnName FROM $tableName WHERE $columnName='$value'");
+                        if (isset($colValue) && $colValue == $value) {
+                            $isUnique = false;
+                        }
+                        break;
+                    }
+                }
+            }
+        } catch (Exception $exc) {
+            error_log("ERROR:isUnique:" . $exc);
+            $isUnique = false;
+        }
+        return $isUnique;
+    }
+
+    /**
+     * Checking if the email entered is valid.
+     */
+    public function isValidEmail($email) {
+        $isValid = true;
+        if (null === $email || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $isValid = false;
+        }
+        return $isValid;
+    }
+
+    public function isActionValid($action) {
+        $user = new user();
+        $isValid = false;
+        //TODO: remove the delete_subject
+        if (!empty($action) && ($action == "Login" || $action == "sign_up") || $action == "delete_subject" || $action == "send_message") {
+            $isValid = true;
+        } else if ($user->checkLogin()) {
+            $isValid = true;
+        }
+        return $isValid;
     }
 
 }

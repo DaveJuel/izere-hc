@@ -118,8 +118,7 @@ include "../content/modular.php";
         <script src="../js/pages/dashboard.js"></script>
         <script src="../js/main.js"></script>
         <script src="../js/pages/table-data.js"></script>
-        <script src="../plugins/datatables/js/jquery.datatables.min.js"></script>
-        <script src="../js/custom.js"></script>
+        <script src="../plugins/datatables/js/jquery.datatables.min.js"></script>        
         <script src="../js/interface.js"></script>       
         <script type="text/javascript" src="../../js/tawkChat.js"></script>
     </body>
