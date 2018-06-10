@@ -1,10 +1,21 @@
 <?php
 require '../includes/interface.php';
 ?>
-<?php $title = 'Add content' ?>
-<?php ob_start(); ?>
+<?php $title = 'Add content'?>
+<?php ob_start();?>
 <div class="col-md-8">
     <form class="form-horizontal" id="content-add" method="post" action="<?php echo $_SERVER['PHP_SELF'] ?>" role="form">
+         <div class="form-group">
+            <label class="control-label" class="form-control">type</label>
+            <select name="subject_type" required class="form-control">
+                <option value="0">Select subject type</option>
+                <option value="container">container</option>
+                <option value="single">single</option>
+                <?php
+$subject->loadContainerCombo();
+?>
+            </select>
+        </div>
         <div class="form-group">
             <label class="control-label">Title</label>
             <input type="text" required class="form-control" name="subject_title" id="content-title" placeholder="Set the subject title">
@@ -40,7 +51,7 @@ require '../includes/interface.php';
                     <input type="radio" name="subject_likes" value="false">
                     Disabled </label>
             </div>
-        </div>		
+        </div>
         <div class="form-group">
             <label>Display views</label>
             <div>
@@ -53,12 +64,12 @@ require '../includes/interface.php';
             </div>
         </div>
         <div class="form-group">
-            <input type="submit" class="btn btn-dark" name="action" value="Add subject">			
+            <input type="submit" class="btn btn-dark" name="action" value="Add subject">
         </div>
-        <div class="form-group"><?php echo $subject->status; ?></div> 
+        <div class="form-group"><?php echo $subject->status; ?></div>
     </form>
 </div>
-<?php $content = ob_get_clean(); ?>
+<?php $content = ob_get_clean();?>
 <?php
 include '../layout/layout_main.php';
 ?>

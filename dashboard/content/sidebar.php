@@ -30,7 +30,7 @@
                 <?php $main->makeLinks("view"); ?>
             </ul>
         </li>
-        <?php if ($user->getUserType($_SESSION['user_id']) == 'administrator') { ?>
+        <?php if ($user->getUserType($_SESSION['user_id']) == 'author') { ?>
             <li class="droplink"><a href="#" class="waves-effect waves-button"><span class="menu-icon glyphicon glyphicon-pushpin"></span><p>Subject</p><span class="arrow"></span></a>
                 <ul class="sub-menu">
                     <li>

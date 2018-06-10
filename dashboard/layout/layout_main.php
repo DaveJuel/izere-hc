@@ -48,7 +48,7 @@ if ($login_status != true) {
 
         <script>
             $(document).ready(function () {
-                $('#example').DataTable();
+                $('.details-table-view').DataTable();
             });
         </script>
         <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
@@ -79,7 +79,7 @@ include "../content/modular.php";
                     <div class="page-breadcrumb">
                         <ol class="breadcrumb">
                             <li><a href="home.php">Dashboard</a></li>
-                            <li class="active"><?php echo $title ?></li>
+                            <li class="active"><?php echo $title ?> <span id="notification"></span></li>
                         </ol>
                     </div>
                 </div>

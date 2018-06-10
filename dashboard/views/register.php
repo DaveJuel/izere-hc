@@ -17,9 +17,6 @@
                 <input type="text" name="register_email" class="form-control" placeholder="email" required>
             </div>
             <div class="form-group">
-                <input type="text" name="register_username" class="form-control" placeholder="Username" required>
-            </div>
-            <div class="form-group">
                 <input type="password" name="register_password" class="form-control" placeholder="Password" required>
             </div>
             <div class="form-group">
